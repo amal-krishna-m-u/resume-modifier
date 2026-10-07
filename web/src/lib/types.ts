@@ -140,6 +140,8 @@ export interface Gap {
 export interface RunDetail {
   id: string;
   stages: string[];
+  running?: boolean;
+  complete?: boolean;
   posting?: string;
   requirements?: { role_title?: string; seniority?: string; requirements: Requirement[] };
   merged?: Merged;
