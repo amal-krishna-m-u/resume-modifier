@@ -477,13 +477,16 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
 
     @router.get("/runs/{run_id}/export.tex")
     async def runs_export_tex(run_id: str, contact_set: str = Query(None)) -> FileResponse:
-        return FileResponse(_export(context, run_id, contact_set, compile_to_pdf=False))
+        path = _export(context, run_id, contact_set, compile_to_pdf=False)
+        return FileResponse(
+            path, media_type="application/x-tex", filename=_download_name(run_id, path)
+        )
 
     @router.get("/runs/{run_id}/export.pdf")
     async def runs_export_pdf(run_id: str, contact_set: str = Query(None)) -> FileResponse:
+        path = _export(context, run_id, contact_set, compile_to_pdf=True)
         return FileResponse(
-            _export(context, run_id, contact_set, compile_to_pdf=True),
-            media_type="application/pdf",
+            path, media_type="application/pdf", filename=_download_name(run_id, path)
         )
 
     return router
@@ -509,6 +512,16 @@ def _written(result) -> dict[str, Any]:
         "path": result.path.name,
         "warnings": [_issue(w) for w in result.warnings],
     }
+
+
+def _download_name(run_id: str, path: Path) -> str:
+    """A filename that means something in a Downloads folder.
+
+    Without this the browser saves every export as `export.pdf`, so the second
+    one becomes `export (1).pdf` and nobody can tell which posting either was
+    for. The run slug already carries the date and the company.
+    """
+    return f"{run_id}-{path.stem}{path.suffix}"
 
 
 def _application_dir(context: Context, company: str, leaf: str) -> Path:
