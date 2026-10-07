@@ -5,6 +5,7 @@ import type { StageEvent } from "../lib/types";
 import { StageTrack } from "../components/StageTrack";
 import { Review } from "./Review";
 import { Chat } from "../components/Chat";
+import { Promote } from "../components/Promote";
 
 export function RunScreen({ runId }: { runId: string }) {
   const queryClient = useQueryClient();
@@ -77,6 +78,12 @@ export function RunScreen({ runId }: { runId: string }) {
                 PDF · {set}
               </a>
             ))}
+            <Promote
+              runId={runId}
+              onDone={(id) => {
+                window.location.hash = `/application/${id}`;
+              }}
+            />
             <a
               href={reviewed ? `/api/runs/${runId}/export.tex` : undefined}
               aria-disabled={!reviewed}

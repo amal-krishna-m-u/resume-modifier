@@ -160,3 +160,34 @@ export interface StageEvent {
   repairs?: number;
   reason?: string;
 }
+
+export interface ApplicationRow {
+  id: string;
+  company: string;
+  company_slug: string;
+  role: string;
+  job_id: string | null;
+  applied_on: string;
+  status: string;
+  referral_received: number;
+  referrer: string | null;
+  contact_set_sent: string | null;
+  run_id: string | null;
+  last_stage_on: string | null;
+}
+
+export interface Divergence {
+  fact_id: string;
+  status: "changed" | "deleted" | "added-since";
+  sent?: string;
+  current?: string;
+}
+
+export interface Snapshot {
+  frozen_at: string;
+  run_id: string;
+  template_version: string;
+  summary?: string;
+  bullets: { lead?: string; text: string; sources: string[] }[];
+  facts_as_sent: { id: string; body?: string; sha256?: string }[];
+}

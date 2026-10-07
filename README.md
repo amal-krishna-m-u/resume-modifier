@@ -280,6 +280,10 @@ directory, not from version control ([open-questions OQ-3](docs/open-questions.m
 .venv/bin/rt render                      # the whole KB, no agents involved
 .venv/bin/rt tailor --file posting.txt   # the five-agent pipeline
 .venv/bin/rt tailor --resume <run-id>    # continue from the last completed stage
+
+.venv/bin/rt apply <run-id> --company Acme --role "Backend Engineer"
+.venv/bin/rt applications list --live    # the tracker
+.venv/bin/rt applications verify         # re-hash the archive, report drift
 ```
 
 A `tailor` run writes everything it did into `runs/<id>/`: the requirements it
@@ -297,8 +301,32 @@ source of truth — it is all reproducible from `kb/` plus the posting.
 | M4 | The five-agent pipeline, end to end from a CLI | **done** |
 | M5 | FastAPI write path and SSE | **done** |
 | M6 | React UI | **done** |
-| M7 | Application archive and tracker | next |
-| M8 | Self-hosted Langfuse tracing and prompt evals ([OQ-10](docs/open-questions.md)) | |
+| M7 | Application archive and tracker | **done** |
+| M8 | Self-hosted Langfuse tracing and prompt evals ([OQ-10](docs/open-questions.md)) | next |
+
+## After you apply
+
+```bash
+.venv/bin/rt apply <run-id> --company Acme --role "Backend Engineer" --job-id R1234
+```
+
+Promotion is **explicit**. Exporting a PDF does not create a record — you often
+export just to look at something. This is the moment the system can know the
+content became permanent, so it is the moment it freezes.
+
+What freezes: the rendered resumes, the job description, and a content snapshot
+holding the **full text of every fact as it read at send time**. What stays
+editable: status, interview stages, referral details, notes.
+
+The snapshot embeds fact bodies rather than referencing them, because a
+reference would resolve to the *current* fact. The knowledge base moves on, and
+a resume regenerated from today's corpus is not the resume that was sent —
+preparing for an interview against reconstructed content is worse than having
+no record, because it is confidently wrong.
+
+`rt applications verify` re-hashes everything and reports drift. The archive
+lives in `applications/`, company-first, and is gitignored: it holds complete
+resumes, job descriptions and third-party referrer names.
 
 ## The web interface
 
@@ -334,7 +362,7 @@ Stdlib only. Fails on untraced requirements, acceptance criteria without Given/W
 
 ## Next step
 
-M7: the application archive and tracker
-([spec-07](docs/spec-07-applications-and-tracker.md)) — promoting a run into a
-permanent record of what was actually sent, with the content frozen so a later
-interview can be prepared against the real thing.
+M8: self-hosted Langfuse tracing and a prompt eval set
+([OQ-10](docs/open-questions.md)) — so "did prompt v2 select better than v1"
+becomes answerable, which is what OQ-6 (which model for which agent) is waiting
+on.

@@ -11,6 +11,10 @@ from pathlib import Path
 
 import typer
 
+from .applications import db as appdb
+from .applications import record as apprecord
+from .applications import views
+from .applications.promote import PromotionConflict, promote, verify
 from .config import Config
 from .kb.identity import load_identity
 from .kb.index import write_index
@@ -463,6 +467,145 @@ def serve(
         reload=reload,
         log_level="info",
     )
+
+
+apps_app = typer.Typer(no_args_is_help=True, help="The application archive and tracker.")
+app.add_typer(apps_app, name="applications")
+
+
+@app.command("apply")
+def apply_command(
+    run_id: str = typer.Argument(..., help="The run that produced what you sent."),
+    company: str = typer.Option(..., "--company"),
+    role: str = typer.Option(..., "--role"),
+    root: Path | None = ROOT_OPTION,
+    job_id: str | None = typer.Option(None, "--job-id"),
+    job_url: str | None = typer.Option(None, "--job-url"),
+    source: str | None = typer.Option(
+        None, "--source", help="referral | board | direct | recruiter"
+    ),
+    sent: str | None = typer.Option(None, "--sent", help="Which contact set actually went out."),
+    on: str | None = typer.Option(None, "--on", help="Application date; defaults to today."),
+) -> None:
+    """Record that you applied — freezing what was sent.
+
+    Exporting a PDF does not create a record; you often export to look at
+    something. This is the moment the system can know the content became
+    permanent, so it is the moment it freezes.
+    """
+    from datetime import date as _date
+
+    base, kb_dir, _ = _resolve(root)
+    run = Run(base / "runs" / run_id)
+    if not run.directory.is_dir():
+        typer.secho(f"no run named {run_id!r}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+
+    try:
+        promotion = promote(
+            base,
+            run,
+            company=company,
+            role=role,
+            applied_on=_date.fromisoformat(on) if on else None,
+            job_id=job_id,
+            job_url=job_url,
+            source=source,
+            contact_set_sent=sent,
+        )
+    except PromotionConflict as exc:
+        typer.secho(f"  {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1) from exc
+
+    appdb.reindex(base / "applications", base / ".cache")
+    views.regenerate(base / "applications")
+
+    typer.secho(f"\n  {promotion.application.id}", bold=True)
+    typer.echo(f"  {promotion.directory.relative_to(base)}")
+    for name in sorted(p.name for p in promotion.directory.iterdir() if p.is_file()):
+        typer.echo(f"      {name}")
+    typer.secho(
+        "\n  Frozen. The resumes and the content snapshot are read-only and hashed;\n"
+        "  status, stages and referral stay editable.",
+        fg=typer.colors.GREEN,
+    )
+
+
+@apps_app.command("list")
+def applications_list(
+    root: Path | None = ROOT_OPTION,
+    company: str | None = typer.Option(None, "--company"),
+    status: str | None = typer.Option(None, "--status"),
+    live: bool = typer.Option(False, "--live", help="Only applications still in play."),
+) -> None:
+    """The tracker."""
+    base, _, cache = _resolve(root)
+    applications_dir = base / "applications"
+    if appdb.is_stale(applications_dir, cache):
+        appdb.reindex(applications_dir, cache)
+
+    rows = appdb.query(cache, company=company, status=status, live_only=live)
+    if not rows:
+        typer.echo("  no applications yet — record one with `rt apply <run-id> ...`")
+        return
+
+    counts = appdb.pipeline_counts(cache)
+    live_total = sum(counts.get(s, 0) for s in apprecord.LIVE_STATUSES)
+    typer.secho(
+        f"  {len(rows)} shown · {live_total} live · "
+        + " · ".join(f"{k} {v}" for k, v in sorted(counts.items())),
+        fg=typer.colors.BLUE,
+    )
+    typer.echo()
+    typer.secho(
+        f"  {'applied':<12}{'company':<22}{'role':<30}{'status':<11}{'ref':<5}sent",
+        bold=True,
+    )
+    for row in rows:
+        typer.echo(
+            f"  {row['applied_on']:<12}{row['company'][:20]:<22}{row['role'][:28]:<30}"
+            f"{row['status']:<11}{'yes' if row['referral_received'] else '-':<5}"
+            f"{row['contact_set_sent'] or '-'}"
+        )
+
+
+@apps_app.command("verify")
+def applications_verify(root: Path | None = ROOT_OPTION) -> None:
+    """Re-hash every archived artifact and report drift.
+
+    Read-only permissions are a guardrail against accident — anyone can chmod —
+    so the hash is what actually establishes that what is on disk is what was
+    sent.
+    """
+    base, _, _ = _resolve(root)
+    checked = drifted = 0
+    for path in sorted((base / "applications").glob("*/*/application.yaml")):
+        if "_views" in path.parts:
+            continue
+        checked += 1
+        result = verify(path.parent)
+        if not result["intact"]:
+            drifted += 1
+            typer.secho(f"  DRIFT  {result['id']}", fg=typer.colors.RED)
+            for problem in result["problems"]:
+                typer.echo(f"           {problem['file']}: {problem['issue']}")
+
+    if not checked:
+        typer.echo("  nothing archived yet")
+        return
+    colour = typer.colors.RED if drifted else typer.colors.GREEN
+    typer.secho(f"  {checked} checked, {drifted} with drift", fg=colour)
+    if drifted:
+        raise typer.Exit(1)
+
+
+@apps_app.command("reindex")
+def applications_reindex(root: Path | None = ROOT_OPTION) -> None:
+    """Rebuild the SQLite index and the month views. Always safe."""
+    base, _, cache = _resolve(root)
+    indexed = appdb.reindex(base / "applications", cache)
+    linked = views.regenerate(base / "applications")
+    typer.echo(f"  indexed {indexed} application(s), {linked} month link(s)")
 
 
 if __name__ == "__main__":
