@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 FACT = {
@@ -262,3 +263,85 @@ def test_identity_reports_contact_sets(client: TestClient) -> None:
     body = client.get("/api/identity").json()
     assert body["configured"] is True
     assert body["contact_sets"] == ["default"]
+
+
+# -- in-progress runs stay visible -----------------------------------------
+
+
+async def test_a_new_subscriber_is_replayed_recent_events() -> None:
+    """Found by using it: navigating away from a running job and back showed
+    an empty progress panel until the next stage happened to finish — which on
+    the selection stage is a minute of looking at nothing while the run is
+    healthy."""
+    import asyncio
+
+    from resume_tailor.api.events import Channel
+
+    channel = Channel()
+    channel.publish("stage", {"stage": "analyst", "status": "done"})
+    channel.publish("stage", {"stage": "selector", "status": "running"})
+
+    stream = channel.subscribe()
+    assert "open" in await asyncio.wait_for(anext(stream), timeout=2)
+
+    replayed = [
+        await asyncio.wait_for(anext(stream), timeout=2),
+        await asyncio.wait_for(anext(stream), timeout=2),
+    ]
+    assert "analyst" in replayed[0]
+    assert "selector" in replayed[1]
+    await stream.aclose()
+
+
+async def test_the_replay_buffer_is_bounded() -> None:
+    """A long-lived channel must not grow without limit."""
+    from resume_tailor.api.events import Channel
+
+    channel = Channel(history_size=4)
+    for i in range(50):
+        channel.publish("stage", {"i": i})
+    assert len(channel._history) == 4
+
+
+async def test_a_fresh_attempt_clears_the_replay() -> None:
+    """Otherwise a re-run shows the previous attempt's stages as its own."""
+    import asyncio
+
+    from resume_tailor.api.events import Channel
+
+    channel = Channel()
+    channel.publish("stage", {"stage": "analyst", "status": "done"})
+    channel.reset()
+
+    stream = channel.subscribe()
+    assert "open" in await asyncio.wait_for(anext(stream), timeout=2)
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(anext(stream), timeout=0.3)
+    await stream.aclose()
+
+
+def test_the_runs_list_marks_which_are_live(client: TestClient, project: Path) -> None:
+    """On disk a half-finished run and an abandoned one look identical, so
+    liveness has to come from the process that owns the task."""
+    from resume_tailor.pipeline.artifacts import Run
+
+    Run.create(project / "runs", "quiet")
+    rows = {row["id"]: row for row in client.get("/api/runs").json()["runs"]}
+    assert rows["quiet"]["running"] is False
+    assert rows["quiet"]["complete"] is False
+
+    client.app.state.context.active_runs.add("quiet")
+    rows = {row["id"]: row for row in client.get("/api/runs").json()["runs"]}
+    assert rows["quiet"]["running"] is True
+
+
+def test_run_detail_reports_liveness_and_completion(client: TestClient, project: Path) -> None:
+    from resume_tailor.pipeline.artifacts import Run
+
+    run = Run.create(project / "runs", "detail")
+    assert client.get("/api/runs/detail").json()["complete"] is False
+
+    run.write("validation", {"verdict": "clean", "clean": True})
+    body = client.get("/api/runs/detail").json()
+    assert body["complete"] is True
+    assert body["running"] is False

@@ -69,6 +69,10 @@ class Context:
         self.config = Config.load(self.root)
         self.hub = Hub()
         self.watcher = KbWatcher(self.kb_dir, self.hub)
+        #: Runs with a pipeline task in flight. On disk a half-finished run
+        #: and an abandoned one look identical, so liveness has to be held
+        #: in the process that owns the task.
+        self.active_runs: set[str] = set()
 
     def corpus(self):
         return load_corpus(self.kb_dir)
@@ -272,7 +276,13 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
     async def runs_list() -> dict[str, Any]:
         return {
             "runs": [
-                {"id": r.id, "stages": r.completed_stages()} for r in list_runs(context.runs_dir)
+                {
+                    "id": run.id,
+                    "stages": run.completed_stages(),
+                    "running": run.id in context.active_runs,
+                    "complete": run.has("validation"),
+                }
+                for run in list_runs(context.runs_dir)
             ]
         }
 
@@ -282,6 +292,8 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         return {
             "id": run.id,
             "stages": run.completed_stages(),
+            "running": run.id in context.active_runs,
+            "complete": run.has("validation"),
             **{stage: run.read(stage) for stage in run.completed_stages()},
         }
 
@@ -522,6 +534,8 @@ def _run_or_404(context: Context, run_id: str) -> Run:
 async def _execute(context: Context, run: Run, posting: str, payload: dict) -> None:
     """Run the pipeline, streaming progress to the run's channel."""
     hub = context.hub
+    hub.run(run.id).reset()
+    context.active_runs.add(run.id)
 
     def progress(stage: str, status: str, detail: dict) -> None:
         hub.publish_stage(run.id, stage, status, detail)
@@ -557,11 +571,15 @@ async def _execute(context: Context, run: Run, posting: str, payload: dict) -> N
                 "resumable": bool(run.completed_stages()),
             },
         )
+    finally:
+        context.active_runs.discard(run.id)
 
 
 async def _revise(context: Context, run: Run, message: str) -> None:
     """Chat revision, streamed on the same channel as the original run."""
     hub = context.hub
+    hub.run(run.id).reset()
+    context.active_runs.add(run.id)
 
     def progress(stage: str, status: str, detail: dict) -> None:
         hub.publish_stage(run.id, stage, status, detail)
@@ -582,6 +600,8 @@ async def _revise(context: Context, run: Run, message: str) -> None:
         hub.run(run.id).publish(
             "error", {"message": str(exc), "code": type(exc).__name__, "resumable": True}
         )
+    finally:
+        context.active_runs.discard(run.id)
 
 
 def _export(context: Context, run_id: str, contact_set: str | None, *, compile_to_pdf: bool):

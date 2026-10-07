@@ -52,7 +52,14 @@ function useRoute(): [View, (view: View) => void] {
 export function App() {
   const [view, navigate] = useRoute();
   const queryClient = useQueryClient();
-  const runs = useQuery({ queryKey: ["runs"], queryFn: api.runs });
+  const runs = useQuery({
+    queryKey: ["runs"],
+    queryFn: api.runs,
+    // Cheap, and it is how a running job stays findable from any screen.
+    refetchInterval: 5000,
+  });
+
+  const active = (runs.data?.runs ?? []).filter((run) => run.running);
 
   // Editing in the browser, in vim, and an agent proposal are three paths to
   // the same bytes (spec-01 P1), so the UI has to learn about the other two.
@@ -89,6 +96,30 @@ export function App() {
             </Tab>
           </nav>
           <div className="ml-auto flex items-center gap-3">
+            {/* A running job stays reachable from every screen. Without this,
+                navigating away from one meant losing track of it entirely. */}
+            {active.map((run) => (
+              <button
+                key={run.id}
+                onClick={() => navigate({ name: "run", id: run.id })}
+                className="flex items-center gap-2 rounded border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 px-2.5 py-1 text-xs"
+                title={run.id}
+              >
+                <span className="size-1.5 rounded-full bg-sky-500 animate-pulse" />
+                <span className="max-w-40 truncate">
+                  {run.stages.includes("validation")
+                    ? "finishing"
+                    : run.stages.includes("draft")
+                      ? "validating"
+                      : run.stages.includes("merged")
+                        ? "writing"
+                        : run.stages.includes("requirements")
+                          ? "selecting"
+                          : "analysing"}
+                </span>
+              </button>
+            ))}
+
             {runs.data && runs.data.runs.length > 0 && (
               <select
                 className="text-sm bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 max-w-64"
@@ -97,9 +128,10 @@ export function App() {
                   event.target.value && navigate({ name: "run", id: event.target.value })
                 }
               >
-                <option value="">Past runs…</option>
+                <option value="">Runs…</option>
                 {runs.data.runs.map((run) => (
                   <option key={run.id} value={run.id}>
+                    {run.running ? "● " : run.complete ? "" : "· "}
                     {run.id}
                   </option>
                 ))}

@@ -85,7 +85,10 @@ export const api = {
       body: JSON.stringify({ sha }),
     }),
 
-  runs: () => request<{ runs: { id: string; stages: string[] }[] }>("/runs"),
+  runs: () =>
+    request<{
+      runs: { id: string; stages: string[]; running: boolean; complete: boolean }[];
+    }>("/runs"),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
   gapReport: (id: string) => request<{ markdown: string }>(`/runs/${id}/gap-report`),
 

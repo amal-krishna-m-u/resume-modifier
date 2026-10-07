@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-from collections import defaultdict
+from collections import defaultdict, deque
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,24 +29,39 @@ def format_event(event: str, data: Any) -> str:
 
 @dataclass
 class Channel:
-    """A fan-out queue. Subscribers that fall behind are dropped, not blocked.
+    """A fan-out queue with a short replay buffer.
 
-    A browser tab that stops reading must never stall a pipeline run, so a full
-    queue loses events rather than applying backpressure to the producer.
+    Subscribers that fall behind are dropped, not blocked: a browser tab that
+    stops reading must never stall a pipeline run, so a full queue loses events
+    rather than applying backpressure to the producer.
+
+    **New subscribers are replayed the recent history.** Without it, navigating
+    away from a running job and back showed an empty progress panel until the
+    next stage happened to finish — which on the selection stage can be a
+    minute of looking at nothing while the run is in fact healthy.
     """
 
     maxsize: int = 100
+    #: Enough for a whole run: five stages produce ten events, plus a terminal
+    #: one. Bounded so a long-lived channel cannot grow without limit.
+    history_size: int = 64
 
     def __post_init__(self) -> None:
         self._subscribers: set[asyncio.Queue] = set()
+        self._history: deque[str] = deque(maxlen=self.history_size)
 
     def publish(self, event: str, data: Any) -> None:
         message = format_event(event, data)
+        self._history.append(message)
         for queue in list(self._subscribers):
             # Dropped, not awaited: a browser tab that stopped reading must
             # never stall a pipeline run.
             with contextlib.suppress(asyncio.QueueFull):
                 queue.put_nowait(message)
+
+    def reset(self) -> None:
+        """Drop the replay buffer — called when a run starts a fresh attempt."""
+        self._history.clear()
 
     async def subscribe(self) -> AsyncIterator[str]:
         queue: asyncio.Queue[str] = asyncio.Queue(maxsize=self.maxsize)
@@ -55,6 +70,8 @@ class Channel:
             # An immediate event so the client knows the stream is live rather
             # than waiting on a connection that may have silently failed.
             yield format_event("open", {"ok": True})
+            for message in list(self._history):
+                yield message
             while True:
                 try:
                     yield await asyncio.wait_for(queue.get(), timeout=20)
