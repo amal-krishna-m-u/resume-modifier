@@ -12,6 +12,7 @@ LAN would hand both to anyone on the network.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,11 @@ from fastapi import APIRouter, Body, FastAPI, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from ..applications import db as appdb
+from ..applications import record as apprecord
+from ..applications import snapshot as appsnapshot
+from ..applications import views
+from ..applications.promote import PromotionConflict, promote, verify
 from ..config import Config
 from ..kb.gitops import has_remote, history, is_repo, show
 from ..kb.index import build_index
@@ -59,6 +65,7 @@ class Context:
         self.kb_dir = self.root / "kb"
         self.runs_dir = self.root / "runs"
         self.cache_dir = self.root / ".cache"
+        self.applications_dir = self.root / "applications"
         self.config = Config.load(self.root)
         self.hub = Hub()
         self.watcher = KbWatcher(self.kb_dir, self.hub)
@@ -346,6 +353,116 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
             "default_set": identity.default_set,
         }
 
+    # -- applications and tracker -----------------------------------------
+
+    @router.get("/applications")
+    async def applications_list(
+        company: str = Query(None),
+        status: str = Query(None),
+        month: str = Query(None),
+        referral: bool = Query(None),
+        live_only: bool = Query(False),
+    ) -> dict[str, Any]:
+        # Rebuilt transparently when a YAML has been hand-edited. The index is
+        # derived; nothing reads it as authority (spec-07 §6).
+        if appdb.is_stale(context.applications_dir, context.cache_dir):
+            appdb.reindex(context.applications_dir, context.cache_dir)
+        return {
+            "applications": appdb.query(
+                context.cache_dir,
+                company=company,
+                status=status,
+                month=month,
+                referral=referral,
+                live_only=live_only,
+            ),
+            "pipeline": appdb.pipeline_counts(context.cache_dir),
+        }
+
+    @router.get("/applications/{company}/{leaf}")
+    async def application_read(company: str, leaf: str) -> dict[str, Any]:
+        directory = _application_dir(context, company, leaf)
+        application = apprecord.load(directory / "application.yaml")
+        return {
+            "application": application.model_dump(mode="json"),
+            "files": sorted(p.name for p in directory.iterdir() if p.is_file()),
+        }
+
+    @router.patch("/applications/{company}/{leaf}")
+    async def application_patch(
+        company: str, leaf: str, payload: dict = Body(...)
+    ) -> dict[str, Any]:
+        directory = _application_dir(context, company, leaf)
+        path = directory / "application.yaml"
+        try:
+            updated = apprecord.apply_patch(apprecord.load(path), payload)
+        except apprecord.FrozenField as exc:
+            raise WriteError(
+                str(exc),
+                remedy="What was sent is frozen. Status, stages, referral and notes are not.",
+                detail={"fields": exc.fields},
+            ) from exc
+        apprecord.save(path, updated)
+        appdb.reindex(context.applications_dir, context.cache_dir)
+        return {"application": updated.model_dump(mode="json")}
+
+    @router.get("/applications/{company}/{leaf}/snapshot")
+    async def application_snapshot(company: str, leaf: str) -> dict[str, Any]:
+        directory = _application_dir(context, company, leaf)
+        path = directory / "content-snapshot.json"
+        if not path.is_file():
+            raise NotFound("no snapshot for this application", remedy="It predates snapshots.")
+        frozen = json.loads(path.read_text(encoding="utf-8"))
+        return {
+            "snapshot": frozen,
+            # The comparison IS the feature (AC-R20.4): it says exactly where
+            # today's knowledge base would mislead you in an interview.
+            "divergence": appsnapshot.divergence(frozen, context.corpus()),
+        }
+
+    @router.get("/applications/{company}/{leaf}/verify")
+    async def application_verify(company: str, leaf: str) -> dict[str, Any]:
+        return verify(_application_dir(context, company, leaf))
+
+    @router.post("/applications/reindex")
+    async def applications_reindex() -> dict[str, Any]:
+        count = appdb.reindex(context.applications_dir, context.cache_dir)
+        return {"indexed": count, "views": views.regenerate(context.applications_dir)}
+
+    @router.post("/runs/{run_id}/promote")
+    async def run_promote(run_id: str, payload: dict = Body(...)) -> dict[str, Any]:
+        from datetime import date as _date
+
+        run = _run_or_404(context, run_id)
+        applied_on = payload.get("applied_on")
+        try:
+            promotion = promote(
+                context.root,
+                run,
+                company=payload["company"],
+                role=payload["role"],
+                applied_on=_date.fromisoformat(applied_on) if applied_on else None,
+                job_id=payload.get("job_id"),
+                job_url=payload.get("job_url"),
+                source=payload.get("source"),
+                contact_set_sent=payload.get("contact_set_sent"),
+                corpus=context.corpus(),
+            )
+        except PromotionConflict as exc:
+            raise WriteError(
+                str(exc),
+                remedy="Start a new run if you applied again — the date makes it distinct.",
+                detail={"existing": str(exc.existing)},
+            ) from exc
+
+        appdb.reindex(context.applications_dir, context.cache_dir)
+        views.regenerate(context.applications_dir)
+        return {
+            "id": promotion.application.id,
+            "directory": str(promotion.directory.relative_to(context.root)),
+            "rendered": promotion.rendered,
+        }
+
     @router.get("/runs/{run_id}/export.tex")
     async def runs_export_tex(run_id: str, contact_set: str = Query(None)) -> FileResponse:
         return FileResponse(_export(context, run_id, contact_set, compile_to_pdf=False))
@@ -380,6 +497,19 @@ def _written(result) -> dict[str, Any]:
         "path": result.path.name,
         "warnings": [_issue(w) for w in result.warnings],
     }
+
+
+def _application_dir(context: Context, company: str, leaf: str) -> Path:
+    """Resolve and contain. These come straight from a URL."""
+    from ..kb.paths import PathEscape, contain
+
+    try:
+        directory = contain(Path(company) / leaf, context.applications_dir)
+    except PathEscape as exc:
+        raise WriteError(str(exc), remedy="Use an id from /api/applications.") from exc
+    if not (directory / "application.yaml").is_file():
+        raise NotFound(f"no application at {company}/{leaf}", remedy="List /api/applications.")
+    return directory
 
 
 def _run_or_404(context: Context, run_id: str) -> Run:

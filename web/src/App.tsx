@@ -4,16 +4,24 @@ import { api, watchKb } from "./lib/api";
 import { NewRun } from "./screens/NewRun";
 import { RunScreen } from "./screens/RunScreen";
 import { KbBrowser } from "./screens/KbBrowser";
+import { ApplicationDetail, Tracker } from "./screens/Tracker";
 import { HealthBadge } from "./components/HealthBadge";
 
-type View = { name: "new" } | { name: "run"; id: string } | { name: "kb" };
+type View =
+  | { name: "new" }
+  | { name: "run"; id: string }
+  | { name: "kb" }
+  | { name: "tracker" }
+  | { name: "application"; id: string };
 
 /** Hash routing. No router dependency for three screens on one machine. */
 function useRoute(): [View, (view: View) => void] {
   const parse = (): View => {
     const hash = window.location.hash.replace(/^#\/?/, "");
     if (hash.startsWith("run/")) return { name: "run", id: hash.slice(4) };
+    if (hash.startsWith("application/")) return { name: "application", id: hash.slice(12) };
     if (hash === "kb") return { name: "kb" };
+    if (hash === "tracker") return { name: "tracker" };
     return { name: "new" };
   };
 
@@ -27,7 +35,15 @@ function useRoute(): [View, (view: View) => void] {
 
   const navigate = (next: View) => {
     window.location.hash =
-      next.name === "run" ? `/run/${next.id}` : next.name === "kb" ? "/kb" : "/";
+      next.name === "run"
+        ? `/run/${next.id}`
+        : next.name === "application"
+          ? `/application/${next.id}`
+          : next.name === "kb"
+            ? "/kb"
+            : next.name === "tracker"
+              ? "/tracker"
+              : "/";
   };
 
   return [view, navigate];
@@ -62,6 +78,12 @@ export function App() {
             <Tab active={view.name === "new"} onClick={() => navigate({ name: "new" })}>
               New run
             </Tab>
+            <Tab
+              active={view.name === "tracker" || view.name === "application"}
+              onClick={() => navigate({ name: "tracker" })}
+            >
+              Applications
+            </Tab>
             <Tab active={view.name === "kb"} onClick={() => navigate({ name: "kb" })}>
               Knowledge base
             </Tab>
@@ -92,6 +114,12 @@ export function App() {
         {view.name === "new" && <NewRun onStarted={(id) => navigate({ name: "run", id })} />}
         {view.name === "run" && <RunScreen runId={view.id} />}
         {view.name === "kb" && <KbBrowser />}
+        {view.name === "tracker" && (
+          <Tracker onOpen={(id) => navigate({ name: "application", id })} />
+        )}
+        {view.name === "application" && (
+          <ApplicationDetail id={view.id} onBack={() => navigate({ name: "tracker" })} />
+        )}
       </main>
     </div>
   );

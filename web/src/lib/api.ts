@@ -1,5 +1,6 @@
 import type {
-  Draft, Entry, Gap, Health, Issue, KbIndex, RunDetail, StageEvent, Validation,
+  ApplicationRow, Divergence, Draft, Entry, Gap, Health, Issue, KbIndex, RunDetail,
+  Snapshot, StageEvent, Validation,
 } from "./types";
 
 export class RequestFailed extends Error {
@@ -102,6 +103,40 @@ export const api = {
 
   chatHistory: (id: string) =>
     request<{ turns: { role: string; text: string; clean?: boolean }[] }>(`/runs/${id}/chat`),
+
+  promote: (runId: string, body: Record<string, unknown>) =>
+    request<{ id: string; directory: string; rendered: string[] }>(`/runs/${runId}/promote`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  applications: (filters: { liveOnly?: boolean; status?: string; company?: string } = {}) => {
+    const query = new URLSearchParams();
+    if (filters.liveOnly) query.set("live_only", "true");
+    if (filters.status) query.set("status", filters.status);
+    if (filters.company) query.set("company", filters.company);
+    const suffix = query.toString() ? `?${query}` : "";
+    return request<{ applications: ApplicationRow[]; pipeline: Record<string, number> }>(
+      `/applications${suffix}`,
+    );
+  },
+
+  application: (id: string) =>
+    request<{ application: Record<string, any>; files: string[] }>(`/applications/${id}`),
+
+  applicationSnapshot: (id: string) =>
+    request<{ snapshot: Snapshot; divergence: Divergence[] }>(`/applications/${id}/snapshot`),
+
+  verifyApplication: (id: string) =>
+    request<{ id: string; intact: boolean; problems: { file: string; issue: string }[] }>(
+      `/applications/${id}/verify`,
+    ),
+
+  patchApplication: (id: string, patch: Record<string, unknown>) =>
+    request<{ application: Record<string, unknown> }>(`/applications/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
 };
 
 export type { Draft, Gap, Validation };
