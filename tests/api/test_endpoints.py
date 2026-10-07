@@ -345,3 +345,42 @@ def test_run_detail_reports_liveness_and_completion(client: TestClient, project:
     body = client.get("/api/runs/detail").json()
     assert body["complete"] is True
     assert body["running"] is False
+
+
+# -- exports are downloadable and identifiable ------------------------------
+
+
+def test_exports_carry_a_meaningful_filename(client: TestClient, project: Path) -> None:
+    """Without this the browser saves every export as `export.pdf`, so the
+    second becomes `export (1).pdf` and nobody can tell which posting either
+    was for."""
+    from resume_tailor.pipeline.artifacts import Run
+
+    run = Run.create(project / "runs", "2026-10-07-acme-backend")
+    run.write(
+        "draft",
+        {
+            "sections": [
+                {
+                    "kind": "experience",
+                    "role_id": "acme-engineer",
+                    "bullets": [{"text": "Built it.", "sources": ["acme-pipeline"]}],
+                }
+            ]
+        },
+    )
+    response = client.get("/api/runs/2026-10-07-acme-backend/export.tex")
+    assert response.status_code == 200
+    disposition = response.headers["content-disposition"]
+    assert "attachment" in disposition
+    assert "2026-10-07-acme-backend" in disposition
+    assert disposition.endswith('.tex"')
+
+
+def test_exporting_a_run_with_no_draft_is_refused(client: TestClient, project: Path) -> None:
+    from resume_tailor.pipeline.artifacts import Run
+
+    Run.create(project / "runs", "nodraft")
+    response = client.get("/api/runs/nodraft/export.tex")
+    assert response.status_code == 404
+    assert response.json()["remedy"]

@@ -53,6 +53,12 @@ export const api = {
     request<{ ok: boolean; errors: Issue[]; warnings: Issue[] }>("/kb/validate"),
   entry: (type: string, id: string) => request<Entry>(`/kb/${type}/${id}`),
 
+  taxonomy: () =>
+    request<{
+      terms: Record<string, { label?: string; facet?: string; aliases?: string[] }>;
+      hash: string;
+    }>("/taxonomy"),
+
   saveEntry: (type: string, id: string, raw: string, baseHash: string) =>
     request<{ hash: string; commit: string | null; warnings: Issue[] }>(`/kb/${type}/${id}`, {
       method: "PUT",

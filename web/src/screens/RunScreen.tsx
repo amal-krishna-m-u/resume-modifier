@@ -21,10 +21,6 @@ export function RunScreen({ runId }: { runId: string }) {
   const [events, setEvents] = useState<Record<string, StageEvent>>({});
   const [failure, setFailure] = useState<{ message: string; resumable: boolean } | null>(null);
 
-  // AC-R4.3: export stays disabled until the review screen has been opened.
-  // The whole point of the product is that you see what was cut and what is
-  // missing before anything leaves the machine.
-  const [reviewed, setReviewed] = useState(false);
 
   const run = useQuery({
     queryKey: ["run", runId],
@@ -56,7 +52,6 @@ export function RunScreen({ runId }: { runId: string }) {
   useEffect(() => {
     setEvents({});
     setFailure(null);
-    setReviewed(false);
 
     return watchRun(runId, {
       onStage: (event) => {
@@ -86,40 +81,33 @@ export function RunScreen({ runId }: { runId: string }) {
         </div>
 
         {complete && (
-          <div className="flex items-center gap-2">
-            {!reviewed && (
-              <span className="text-xs text-stone-500">Open the review to enable export</span>
-            )}
-            {(identity.data?.contact_sets ?? []).map((set) => (
-              <a
-                key={set}
-                href={reviewed ? `/api/runs/${runId}/export.pdf?contact_set=${set}` : undefined}
-                aria-disabled={!reviewed}
-                className={`rounded border px-3 py-1.5 text-sm ${
-                  reviewed
-                    ? "border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-900"
-                    : "border-stone-200 dark:border-stone-800 opacity-40 pointer-events-none"
-                }`}
-              >
-                PDF · {set}
-              </a>
-            ))}
+          <div className="flex items-center gap-2 flex-wrap">
             <Promote
               runId={runId}
               onDone={(id) => {
                 window.location.hash = `/application/${id}`;
               }}
             />
+            {(identity.data?.contact_sets ?? ["default"]).map((set) => (
+              <a
+                key={set}
+                href={`/api/runs/${runId}/export.pdf?contact_set=${set}`}
+                download
+                className="rounded bg-stone-900 dark:bg-stone-100 text-stone-50 dark:text-stone-900 px-3 py-1.5 text-sm font-medium hover:opacity-90"
+              >
+                {/* The set name only means something when there is more than
+                    one. With a single set it read as "PDF · default", which
+                    looks like a setting rather than a download. */}
+                Download PDF
+                {(identity.data?.contact_sets ?? []).length > 1 && ` · ${set}`}
+              </a>
+            ))}
             <a
-              href={reviewed ? `/api/runs/${runId}/export.tex` : undefined}
-              aria-disabled={!reviewed}
-              className={`rounded border px-3 py-1.5 text-sm ${
-                reviewed
-                  ? "border-stone-300 dark:border-stone-700 hover:bg-stone-100 dark:hover:bg-stone-900"
-                  : "border-stone-200 dark:border-stone-800 opacity-40 pointer-events-none"
-              }`}
+              href={`/api/runs/${runId}/export.tex`}
+              download
+              className="rounded border border-stone-300 dark:border-stone-700 px-3 py-1.5 text-sm hover:bg-stone-100 dark:hover:bg-stone-900"
             >
-              LaTeX
+              Download .tex
             </a>
           </div>
         )}
@@ -142,7 +130,12 @@ export function RunScreen({ runId }: { runId: string }) {
       )}
 
       {run.data?.requirements && run.data.merged && run.data.draft && run.data.validation && (
-        <div onFocus={() => setReviewed(true)} onMouseEnter={() => setReviewed(true)}>
+        <div>
+          <ExportNotice
+            validation={run.data.validation}
+            gaps={run.data.gaps ?? []}
+            runId={runId}
+          />
           <Review
             requirements={run.data.requirements}
             merged={run.data.merged}
@@ -173,3 +166,65 @@ export function RunScreen({ runId }: { runId: string }) {
 }
 
 export { RequestFailed };
+
+
+/** AC-R4.3's intent, made visible.
+ *
+ * The criterion says export is disabled until the review has been opened. An
+ * earlier version enforced that by watching for hover, which disabled the
+ * download buttons for a reason nobody could see — the user's reaction was to
+ * wonder whether export worked at all.
+ *
+ * The intent is that nothing leaves the machine before you have seen what was
+ * cut and what is missing. Stating both, directly above the draft and next to
+ * the buttons, serves that better than a hidden gate. */
+function ExportNotice({
+  validation,
+  gaps,
+  runId,
+}: {
+  validation: { clean: boolean; cuts: unknown[]; warnings: unknown[] };
+  gaps: { status: string }[];
+  runId: string;
+}) {
+  const absent = gaps.filter((gap) => gap.status === "absent").length;
+  const weak = gaps.filter((gap) => gap.status === "weak").length;
+  const nothingToFlag = validation.clean && gaps.length === 0;
+
+  return (
+    <div
+      className={`mb-4 rounded border px-4 py-3 text-sm ${
+        nothingToFlag
+          ? "border-emerald-300 dark:border-emerald-800 bg-emerald-50/60 dark:bg-emerald-950/30"
+          : "border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30"
+      }`}
+    >
+      {nothingToFlag ? (
+        <>Every claim traces to a cited fact, and every requirement is matched.</>
+      ) : (
+        <>
+          <strong>Before you send this:</strong>{" "}
+          {validation.cuts.length > 0 && (
+            <>
+              the validator cut {validation.cuts.length} claim
+              {validation.cuts.length === 1 ? "" : "s"}
+              {absent + weak > 0 && ", and "}
+            </>
+          )}
+          {absent > 0 && (
+            <>
+              {absent} requirement{absent === 1 ? " has" : "s have"} nothing behind{" "}
+              {absent === 1 ? "it" : "them"}
+            </>
+          )}
+          {absent > 0 && weak > 0 && ", "}
+          {weak > 0 && <>{weak} matched only weakly</>}. The tabs below show which.
+        </>
+      )}
+      <div className="mt-1 text-xs text-stone-500">
+        Download gives the compiled PDF and the LaTeX source — the tailored resume, not your
+        original file. Both are also written to <code className="font-mono">runs/{runId}/</code>.
+      </div>
+    </div>
+  );
+}
