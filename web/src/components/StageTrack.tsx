@@ -10,9 +10,12 @@ const STAGES = ["analyst", "selector", "recall", "writer", "validator"] as const
 export function StageTrack({
   events,
   running,
+  bare = false,
 }: {
   events: Record<string, StageEvent>;
   running: boolean;
+  /** Without the outer card and title, for embedding in another panel. */
+  bare?: boolean;
 }) {
   const total = Object.values(events).reduce(
     (sum, event) => sum + (event.input ?? 0) + (event.cached ?? 0),
@@ -21,19 +24,21 @@ export function StageTrack({
   const output = Object.values(events).reduce((sum, event) => sum + (event.output ?? 0), 0);
 
   return (
-    <div className="rounded border border-stone-200 dark:border-stone-800 p-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">
-          Pipeline {running && <span className="text-stone-400 font-normal">· running</span>}
-        </h2>
-        {total > 0 && (
-          <span className="text-xs tabular-nums text-stone-500">
-            {total.toLocaleString()} prompt · {output.toLocaleString()} output
-          </span>
-        )}
-      </div>
+    <div className={bare ? "" : "card p-4"}>
+      {!bare && (
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold">
+            Pipeline {running && <span className="text-stone-400 font-normal">· running</span>}
+          </h2>
+          {total > 0 && (
+            <span className="text-xs tabular-nums text-stone-500">
+              {total.toLocaleString()} prompt · {output.toLocaleString()} output
+            </span>
+          )}
+        </div>
+      )}
 
-      <div className="mt-3 grid gap-2">
+      <div className={`${bare ? "" : "mt-3"} grid gap-2`}>
         <Stage event={events.analyst} name="analyst" label="Analyst" />
         <div className="grid grid-cols-2 gap-2">
           <Stage event={events.selector} name="selector" label="Selector" />
@@ -73,7 +78,7 @@ function Stage({
     <div className={`rounded border px-3 py-2 text-sm ${tone}`} data-stage={name}>
       <div className="flex items-center justify-between gap-2">
         <span className="font-medium">{label}</span>
-        {status === "done" && event && (
+        {status === "done" && event && hasCounts(event) && (
           <span className="text-xs tabular-nums text-stone-500">
             {((event.input ?? 0) + (event.cached ?? 0)).toLocaleString()} in ·{" "}
             {(event.output ?? 0).toLocaleString()} out
@@ -86,4 +91,10 @@ function Stage({
       </div>
     </div>
   );
+}
+
+/** A stage seeded from disk has no usage unless the run recorded it. Showing
+ * zeros there is wrong rather than empty, so absent counts are left out. */
+function hasCounts(event: StageEvent): boolean {
+  return event.input !== undefined || event.output !== undefined || event.cached !== undefined;
 }

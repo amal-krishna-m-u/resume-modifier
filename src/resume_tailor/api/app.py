@@ -165,6 +165,33 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
     async def kb_index() -> dict[str, Any]:
         return build_index(context.corpus())
 
+    @router.get("/kb/usage")
+    async def kb_usage() -> dict[str, Any]:
+        """How often real runs selected each fact.
+
+        Which entries to expand first is a better question than which are
+        thinnest: a thin internship nobody's posting ever matches matters far
+        less than a thin entry that every run leans on. The evidence is already
+        on disk in each run's merged selection.
+        """
+        counted = 0
+        facts: dict[str, dict[str, int]] = {}
+        for run in list_runs(context.runs_dir):
+            if not run.has("merged"):
+                continue
+            try:
+                merged = run.read("merged")
+            except (ValueError, OSError):
+                continue  # one corrupt run must not hide the others
+            counted += 1
+            for fact in merged.get("facts") or []:
+                row = facts.setdefault(fact.get("fact_id", ""), {"runs": 0, "strong": 0})
+                row["runs"] += 1
+                if fact.get("strength") == "strong":
+                    row["strong"] += 1
+        facts.pop("", None)
+        return {"runs": counted, "facts": facts}
+
     @router.get("/kb/validate")
     async def kb_validate() -> dict[str, Any]:
         report = validate_kb(context.kb_dir, context.corpus())
@@ -483,8 +510,21 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         )
 
     @router.get("/runs/{run_id}/export.pdf")
-    async def runs_export_pdf(run_id: str, contact_set: str = Query(None)) -> FileResponse:
+    async def runs_export_pdf(
+        run_id: str, contact_set: str = Query(None), inline: bool = Query(False)
+    ) -> FileResponse:
         path = _export(context, run_id, contact_set, compile_to_pdf=True)
+        if inline:
+            # For the in-app preview. `attachment` forces a save dialog, which
+            # makes an <iframe> show nothing — and seeing the real compiled
+            # resume next to its review is the point of the preview.
+            return FileResponse(
+                path,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'inline; filename="{_download_name(run_id, path)}"'
+                },
+            )
         return FileResponse(
             path, media_type="application/pdf", filename=_download_name(run_id, path)
         )
@@ -629,6 +669,14 @@ def _export(context: Context, run_id: str, contact_set: str | None, *, compile_t
 
     identity = load_identity(context.kb_dir / "identity.yaml")
     contact_set = contact_set or identity.default_set
+    if contact_set not in identity.contacts:
+        # Was a bare 500: `identity.contact()` raises KeyError and nothing
+        # caught it, so the client got "Internal Server Error" and no way to
+        # tell it had asked for a set that does not exist.
+        raise NotFound(
+            f"no contact set named {contact_set!r}",
+            remedy=f"Configured sets: {', '.join(identity.set_names)}.",
+        )
     draft, _ = apply_validation(
         run.read("draft"), run.read("validation") if run.has("validation") else {}
     )

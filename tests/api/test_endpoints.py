@@ -384,3 +384,86 @@ def test_exporting_a_run_with_no_draft_is_refused(client: TestClient, project: P
     response = client.get("/api/runs/nodraft/export.tex")
     assert response.status_code == 404
     assert response.json()["remedy"]
+
+
+def test_pdf_preview_is_inline_and_download_is_attachment(
+    client: TestClient, project: Path
+) -> None:
+    """An attachment disposition forces a save dialog, which makes an <iframe>
+    show nothing — so the in-app preview needs its own."""
+    from resume_tailor.pipeline.artifacts import Run
+    from resume_tailor.render.compile import available
+
+    if not available():
+        pytest.skip("tectonic is not installed")
+
+    run = Run.create(project / "runs", "preview-run")
+    run.write(
+        "draft",
+        {
+            "sections": [
+                {
+                    "kind": "experience",
+                    "role_id": "acme-engineer",
+                    "bullets": [{"text": "Built it.", "sources": ["acme-pipeline"]}],
+                }
+            ]
+        },
+    )
+    inline = client.get("/api/runs/preview-run/export.pdf?inline=true")
+    assert inline.status_code == 200
+    assert inline.headers["content-disposition"].startswith("inline")
+
+    download = client.get("/api/runs/preview-run/export.pdf")
+    assert download.headers["content-disposition"].startswith("attachment")
+
+
+def test_an_unknown_contact_set_is_a_404_with_a_remedy(client: TestClient, project: Path) -> None:
+    """Found by driving the UI: it asked for a set before identity had loaded,
+    and the server answered with a bare 500 — no code, no remedy, and nothing
+    to say the request itself was wrong."""
+    from resume_tailor.pipeline.artifacts import Run
+
+    run = Run.create(project / "runs", "bad-set")
+    run.write("draft", {"sections": []})
+
+    response = client.get("/api/runs/bad-set/export.tex?contact_set=nonexistent")
+    assert response.status_code == 404
+    body = response.json()
+    assert body["code"] == "not_found"
+    assert "default" in body["remedy"]  # names the sets that do exist
+
+
+# -- which facts real runs lean on -----------------------------------------
+
+
+def test_usage_counts_how_often_runs_select_each_fact(client: TestClient, project: Path) -> None:
+    """Which entries to expand first is a better question than which are
+    thinnest: a thin entry every run leans on matters more than a thin one no
+    posting ever matches."""
+    from resume_tailor.pipeline.artifacts import Run
+
+    for name, strength in (("a", "strong"), ("b", "weak")):
+        run = Run.create(project / "runs", name)
+        run.write("merged", {"facts": [{"fact_id": "acme-pipeline", "strength": strength}]})
+
+    body = client.get("/api/kb/usage").json()
+    assert body["runs"] == 2
+    assert body["facts"]["acme-pipeline"] == {"runs": 2, "strong": 1}
+
+
+def test_a_corrupt_run_does_not_hide_the_others(client: TestClient, project: Path) -> None:
+    from resume_tailor.pipeline.artifacts import Run
+
+    good = Run.create(project / "runs", "good")
+    good.write("merged", {"facts": [{"fact_id": "acme-pipeline", "strength": "strong"}]})
+    bad = Run.create(project / "runs", "bad")
+    bad.path("merged").write_text("{ not json", encoding="utf-8")
+
+    body = client.get("/api/kb/usage").json()
+    assert body["runs"] == 1
+    assert "acme-pipeline" in body["facts"]
+
+
+def test_usage_with_no_runs_is_empty_not_an_error(client: TestClient) -> None:
+    assert client.get("/api/kb/usage").json() == {"runs": 0, "facts": {}}

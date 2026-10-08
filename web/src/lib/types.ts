@@ -26,6 +26,7 @@ export interface IndexRow {
   metrics: number;
   estimated_tokens: number;
   body_words: number;
+  org: string | null;
   path: string;
   sha256: string;
 }

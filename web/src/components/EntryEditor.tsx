@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, RequestFailed } from "../lib/api";
 import { BodyEditor } from "./BodyEditor";
+import { joinTodo, splitTodo } from "../lib/todo";
 
 type Metric = { value: string; what: string };
 
@@ -54,12 +55,15 @@ export function EntryEditor({
   parent,
   onSaved,
   onDeleted,
+  onDirtyChange,
 }: {
   type: string;
   id?: string;
   parent?: string;
   onSaved?: (id: string) => void;
   onDeleted?: () => void;
+  /** So the parent can stop the user navigating away from unsaved edits. */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const queryClient = useQueryClient();
   const creating = !id;
@@ -80,6 +84,7 @@ export function EntryEditor({
   const [mode, setMode] = useState<"form" | "raw">("form");
   const [fields, setFields] = useState<Fields | null>(null);
   const [body, setBody] = useState("");
+  const [note, setNote] = useState<string | null>(null);
   const [raw, setRaw] = useState<string | null>(null);
 
   useEffect(() => {
@@ -110,10 +115,37 @@ export function EntryEditor({
         visibility: (front.visibility as string) ?? "public",
         verifiable: front.verifiable !== false,
       });
-      setBody(entry.data.body);
+      const split = splitTodo(entry.data.body);
+      setBody(split.text);
+      setNote(split.note);
       setRaw(entry.data.raw);
     }
   }, [creating, entry.data, fields, type]);
+
+  // Dirty is "differs from what was loaded", not "differs from the file".
+  // Composing the form back to text never reproduces the file byte for byte,
+  // so comparing against the file would report every entry as edited the
+  // moment it opened.
+  const [initial, setInitial] = useState<string | null>(null);
+  const [savedNote, setSavedNote] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (fields && initial === null) setInitial(JSON.stringify({ fields, body, note }));
+  }, [fields, body, note, initial]);
+
+  const formDirty = initial !== null && JSON.stringify({ fields, body, note }) !== initial;
+  const rawDirty = mode === "raw" && raw !== null && raw !== (entry.data?.raw ?? "") && formDirty;
+  const dirty = formDirty || rawDirty;
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  useEffect(() => {
+    if (!savedNote) return;
+    const timer = setTimeout(() => setSavedNote(null), 5000);
+    return () => clearTimeout(timer);
+  }, [savedNote]);
 
   const terms = useMemo(() => Object.keys(taxonomy.data?.terms ?? {}).sort(), [taxonomy.data]);
   const parents = useMemo(
@@ -126,8 +158,8 @@ export function EntryEditor({
 
   const composed = useMemo(() => {
     if (!fields) return "";
-    return composeRaw(fields, body);
-  }, [fields, body]);
+    return composeRaw(fields, joinTodo(body, note));
+  }, [fields, body, note]);
 
   const save = useMutation({
     mutationFn: () => {
@@ -137,14 +169,29 @@ export function EntryEditor({
         ? api.createEntry(type, entryId, text)
         : api.saveEntry(type, id!, text, entry.data!.hash);
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["kb"] });
+      setSavedNote(result.commit ? `Saved · commit ${result.commit.slice(0, 7)}` : "Saved");
+      setInitial(null);
       if (creating && fields) onSaved?.(fields.id);
       else {
         setFields(null);
         setRaw(null);
       }
     },
+  });
+
+  // Cmd/Ctrl+S saves. An editor you have to reach for the mouse to commit is
+  // not much of an editor.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (dirty && !save.isPending) save.mutate();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
   });
 
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -177,7 +224,9 @@ export function EntryEditor({
               <button
                 key={name}
                 onClick={() => {
-                  if (name === "raw") setRaw(composed);
+                  // Untouched, show the file exactly as it is — the form's
+                  // recomposed text drops anything it has no field for.
+                  if (name === "raw") setRaw(formDirty || creating ? composed : (entry.data?.raw ?? composed));
                   setMode(name);
                 }}
                 className={`px-2 py-1 ${
@@ -188,12 +237,18 @@ export function EntryEditor({
               </button>
             ))}
           </div>
+          {savedNote && !dirty && (
+            <span className="text-xs text-emerald-600 dark:text-emerald-400">{savedNote}</span>
+          )}
+          {dirty && <span className="text-xs text-amber-600 dark:text-amber-400">unsaved</span>}
           <button
             onClick={() => save.mutate()}
-            disabled={save.isPending || !fields.id || !fields.title}
-            className="rounded bg-stone-900 dark:bg-stone-100 text-stone-50 dark:text-stone-900 px-4 py-1.5 text-sm font-medium disabled:opacity-40"
+            disabled={save.isPending || !fields.id || !fields.title || (!creating && !dirty)}
+            className="btn-primary"
+            title="Save (⌘S)"
           >
             {save.isPending ? "Saving…" : creating ? "Create" : "Save"}
+            <span className="kbd hidden sm:inline">⌘S</span>
           </button>
         </div>
       </div>
@@ -208,7 +263,7 @@ export function EntryEditor({
         />
       ) : (
         <div className="space-y-4">
-          <div className="grid sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-[minmax(0,1fr)] sm:grid-cols-2 gap-3">
             <Field label="id" hint="Permanent. Lowercase, hyphens.">
               <input
                 value={fields.id}
@@ -245,7 +300,7 @@ export function EntryEditor({
           )}
 
           {(type === "role" || type === "project" || type === "education") && (
-            <div className="grid sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-[minmax(0,1fr)] sm:grid-cols-3 gap-3">
               <Field label={type === "education" ? "institution" : "org"}>
                 <input
                   value={fields.org ?? ""}
@@ -281,7 +336,7 @@ export function EntryEditor({
             onChange={(tags) => set({ tags })}
           />
 
-          <div className="grid sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-[minmax(0,1fr)] sm:grid-cols-3 gap-3">
             <Field label="depth" hint={DEPTH_HELP[fields.depth]}>
               <select
                 value={fields.depth}
@@ -322,6 +377,28 @@ export function EntryEditor({
 
           <MetricRows metrics={fields.metrics} onChange={(metrics) => set({ metrics })} />
 
+          {note && (
+            <div className="rounded-lg border border-amber-300 dark:border-amber-900 bg-amber-50/70 dark:bg-amber-950/30 p-3">
+              <div className="flex items-start gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold text-amber-900 dark:text-amber-300">
+                    To add here
+                  </div>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-900/80 dark:text-amber-200/80">
+                    {note}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setNote(null)}
+                  className="btn-ghost shrink-0 text-xs"
+                  title="Removes this note when you save"
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          )}
+
           <BodyEditor value={body} onChange={setBody} type={type} />
         </div>
       )}
@@ -354,16 +431,16 @@ export function EntryEditor({
       )}
 
       {!creating && (
-        <div className="rounded border border-stone-200 dark:border-stone-800 p-3">
+        <div className="pt-2">
           {!confirmingDelete ? (
             <button
               onClick={() => setConfirmingDelete(true)}
-              className="text-sm text-stone-500 hover:text-red-700 dark:hover:text-red-400"
+              className="btn-ghost text-xs text-red-700 dark:text-red-400"
             >
               Delete this entry…
             </button>
           ) : (
-            <div className="space-y-2">
+            <div className="rounded-lg border border-red-300 dark:border-red-900 bg-red-50/60 dark:bg-red-950/20 p-3 space-y-2">
               <p className="text-sm">
                 Delete <code className="font-mono text-xs">{id}</code>? It is committed to your
                 local <code className="font-mono text-xs">kb/</code> repository first, so it can
@@ -373,7 +450,7 @@ export function EntryEditor({
                 <button
                   onClick={() => remove.mutate()}
                   disabled={remove.isPending}
-                  className="rounded bg-red-700 text-white px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+                  className="btn-danger"
                 >
                   {remove.isPending ? "Deleting…" : "Yes, delete"}
                 </button>
@@ -382,37 +459,37 @@ export function EntryEditor({
                     setConfirmingDelete(false);
                     remove.reset();
                   }}
-                  className="rounded border border-stone-300 dark:border-stone-700 px-3 py-1.5 text-sm"
+                  className="btn-secondary"
                 >
                   Keep it
                 </button>
               </div>
-            </div>
-          )}
 
-          {deleteFailure && (
-            <div className="mt-3 rounded border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 p-3 text-sm">
-              <div className="font-medium text-red-800 dark:text-red-300">
-                {deleteFailure.message}
-              </div>
-              {referrers.length > 0 && (
-                <>
-                  <p className="mt-1 text-xs text-red-700 dark:text-red-400">
-                    Deleting it now would leave these pointing at nothing — facts with no parent
-                    render nowhere, and a skill with no evidence is where resume inflation
-                    lives. Remove the references first:
-                  </p>
-                  <ul className="mt-1.5 flex flex-wrap gap-1.5">
-                    {referrers.map((referrer) => (
-                      <li
-                        key={referrer}
-                        className="rounded bg-red-100 dark:bg-red-950 px-2 py-0.5 text-xs font-mono"
-                      >
-                        {referrer}
-                      </li>
-                    ))}
-                  </ul>
-                </>
+              {deleteFailure && (
+                <div className="rounded border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 p-3 text-sm">
+                  <div className="font-medium text-red-800 dark:text-red-300">
+                    {deleteFailure.message}
+                  </div>
+                  {referrers.length > 0 && (
+                    <>
+                      <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+                        Deleting it now would leave these pointing at nothing — facts with no
+                        parent render nowhere, and a skill with no evidence is where resume
+                        inflation lives. Remove the references first:
+                      </p>
+                      <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                        {referrers.map((referrer) => (
+                          <li
+                            key={referrer}
+                            className="rounded bg-red-100 dark:bg-red-950 px-2 py-0.5 text-xs font-mono"
+                          >
+                            {referrer}
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                </div>
               )}
             </div>
           )}
@@ -448,8 +525,7 @@ export function EntryEditor({
   );
 }
 
-const input =
-  "mt-1 w-full rounded border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-2 py-1.5 text-sm";
+const input = "field mt-1";
 
 function Field({
   label,

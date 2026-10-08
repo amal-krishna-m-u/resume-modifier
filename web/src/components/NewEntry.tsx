@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import { GUIDES } from "../lib/guidance";
+import { byRecency } from "../lib/roles";
 
 const ORDER = [
   "fact", "role", "project", "blog", "education", "certification", "award",
@@ -25,7 +26,9 @@ export function NewEntry({
 }) {
   const index = useQuery({ queryKey: ["kb", "index"], queryFn: api.kbIndex });
   const counts = index.data?.counts ?? {};
-  const roles = (index.data?.entries ?? []).filter((entry) => entry.type === "role");
+  const roles = (index.data?.entries ?? [])
+    .filter((entry) => entry.type === "role")
+    .sort(byRecency);
 
   const factsPerRole = roles.length > 0 ? (counts.fact ?? 0) / roles.length : 0;
 
@@ -40,9 +43,9 @@ export function NewEntry({
 
       {roles.length > 0 && factsPerRole < 4 && (
         <p className="rounded border border-sky-200 dark:border-sky-900 bg-sky-50/60 dark:bg-sky-950/30 px-3 py-2 text-xs text-sky-900 dark:text-sky-300">
-          You have {counts.fact ?? 0} achievements across {roles.length} roles. Most knowledge
-          bases are too thin here — every achievement you do not record is one the pipeline can
-          never select.
+          {counts.fact ?? 0} achievements across {roles.length} roles is about{" "}
+          {factsPerRole.toFixed(1)} each. Every achievement you do not record is one the
+          pipeline can never select.
         </p>
       )}
 

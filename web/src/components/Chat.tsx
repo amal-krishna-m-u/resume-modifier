@@ -27,12 +27,12 @@ export function Chat({ runId, disabled }: { runId: string; disabled: boolean }) 
   const turns = history.data?.turns ?? [];
 
   return (
-    <section className="mt-8 rounded border border-stone-200 dark:border-stone-800 p-4">
+    <section className="card p-4">
       <h2 className="text-sm font-semibold">Revise</h2>
       <p className="mt-1 text-xs text-stone-500 leading-relaxed">
-        Every revision re-runs the validator. If a request needs a fact you have not recorded,
-        it will be cut and you will be told why — that is the cue to add the fact, not to
-        re-ask.
+        Ask for changes in plain words. Every revision re-runs the validator, so a request
+        that needs a fact you have not recorded gets cut with a reason — the cue to add the
+        fact, not to re-ask.
       </p>
 
       {turns.length > 0 && (
@@ -57,24 +57,32 @@ export function Chat({ runId, disabled }: { runId: string; disabled: boolean }) 
         </ul>
       )}
 
-      <div className="mt-4 flex gap-2">
-        <input
+      <div className="mt-4 space-y-2">
+        <textarea
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter" && message.trim() && !disabled) send.mutate();
+            if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && message.trim() && !disabled) {
+              send.mutate();
+            }
           }}
           disabled={disabled || send.isPending}
+          rows={3}
           placeholder="Lead with the trading engine; drop the award bullet"
-          className="flex-1 rounded border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm disabled:opacity-50"
+          className="field resize-none disabled:opacity-50"
         />
-        <button
-          onClick={() => send.mutate()}
-          disabled={!message.trim() || disabled || send.isPending}
-          className="rounded bg-stone-900 dark:bg-stone-100 text-stone-50 dark:text-stone-900 px-4 py-2 text-sm font-medium disabled:opacity-40"
-        >
-          {send.isPending ? "…" : "Send"}
-        </button>
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] text-stone-400">
+            {send.isPending || disabled ? "Revising — this takes a minute or two…" : "⌘↵ to send"}
+          </span>
+          <button
+            onClick={() => send.mutate()}
+            disabled={!message.trim() || disabled || send.isPending}
+            className="btn-primary"
+          >
+            {send.isPending ? "Revising…" : "Send"}
+          </button>
+        </div>
       </div>
 
       {send.error instanceof RequestFailed && (
