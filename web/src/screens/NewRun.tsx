@@ -105,7 +105,6 @@ export function NewRun({
           <ul className="mt-3 card divide-y divide-stone-200 dark:divide-stone-800">
             {recent.map((run) => {
               const date = run.id.slice(0, 10);
-              const rest = run.id.slice(11).replace(/-/g, " ");
               return (
                 <li key={run.id}>
                   <button
@@ -113,8 +112,10 @@ export function NewRun({
                     className="flex w-full items-center gap-3 px-3.5 py-2.5 text-left hover:bg-stone-50 dark:hover:bg-stone-900/60"
                   >
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm capitalize">{rest || run.id}</span>
-                      <span className="block text-[11px] text-stone-400 tabular-nums">{date}</span>
+                      <span className="block truncate text-sm">{run.title}</span>
+                      <span className="block truncate text-[11px] text-stone-400 tabular-nums">
+                        {[run.company, date].filter(Boolean).join(" · ")}
+                      </span>
                     </span>
                     <State running={run.running} complete={run.complete} />
                   </button>

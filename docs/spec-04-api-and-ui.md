@@ -62,7 +62,9 @@ PUT /api/kb/{type}/{id}
 | `GET` | `/api/runs` | List past runs |
 | `GET` | `/api/runs/{id}` | All artifacts: requirements, selection, draft, validation |
 | `GET` | `/api/runs/{id}/events` | **SSE** — live pipeline progress |
-| `POST` | `/api/runs/{id}/chat` | Revision message → re-run Writer + Validator |
+| `POST` | `/api/runs/{id}/chat` | Revision message → re-run Writer + Validator. `409 run_busy` if one is already running |
+| `GET` | `/api/runs/{id}/chat` | The conversation, including each answer's computed diff and validator findings |
+| `PATCH` | `/api/runs/{id}` | Set a display `title` / `company`. The folder name is permanent and is never renamed |
 | `GET` | `/api/runs/{id}/export.pdf` | Compiled PDF |
 | `GET` | `/api/runs/{id}/export.tex` | LaTeX source for Overleaf |
 | `POST` | `/api/runs/{id}/kb-proposals/{pid}/accept` | Apply a proposed KB change via §2 |
@@ -80,6 +82,19 @@ PUT /api/kb/{type}/{id}
 | `POST` | `/api/applications/reindex` | Rebuild the SQLite index and `_views/` |
 
 `PATCH` accepts only the mutable fields in [spec-07 §4.2](spec-07-applications-and-tracker.md); an attempt to modify a frozen field returns `409` naming the field, rather than being silently dropped.
+
+### Knowledge-base chat
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/kb/chat?scope=` | The conversation and whether the assistant is working |
+| `POST` | `/api/kb/chat` | `{message, scope, focus?}` — records the message at once, answers in the background |
+| `POST` | `/api/kb/chat/proposals/{id}/accept?scope=` | Write the proposal through §2 |
+| `POST` | `/api/kb/chat/proposals/{id}/reject?scope=` | Discard it; writes nothing |
+| `DELETE` | `/api/kb/chat?scope=` | Archive the conversation and start fresh |
+| `GET` | `/api/kb/usage` | How often real runs selected each fact, for ranking what to expand |
+
+`scope` is `kb` for the whole knowledge base or an entry id for a conversation about one entry.
 
 ### System
 
@@ -156,8 +171,34 @@ The frozen record for one application: both resumes, the job description as appl
 
 The snapshot is shown **beside the current KB**, with facts whose text has changed since sending marked as diverged (AC-R20.4). That comparison is the feature — walking into a later-stage interview, what matters is what the interviewer read, and the diff shows exactly where today's KB would mislead you.
 
-### 6.8 Proposals inbox
-Agent-proposed KB changes — Recall's tag proposals (AC-R10.4), chat-derived new facts — as reviewable diffs. Accept routes through §2 like any other write.
+### 6.8 Knowledge-base chat and proposals (AC-R13.2)
+
+Chat is a third mode beside **Form** and **Raw** in the entry editor, and there is a whole-knowledge-base chat ("Add by chat"). Both are ways to *draft* an entry; none is a way around the checks.
+
+The assistant never writes. It returns **proposals**, each shown as exactly what would change — a new entry in full, or for an update only the part that differs (tags added, text appended). A proposal carries its validation result *before* the person looks: one with errors cannot be accepted, and warnings (an unknown tag) are shown but do not block. **Accept** writes through the §2 path; **Reject** writes nothing.
+
+What keeps this safe rather than merely convenient:
+
+- **The model supplies changes, not files.** `add_tags`, `add_metrics`, `body_append` are applied mechanically to the existing file. A model re-emitting a whole file drops a tag or "tidies" a date and nothing flags it. Appending cannot lose text; identity fields cannot be changed; the bootstrap's TODO note is left for the person to clear.
+- **It records only what it was told.** The agent's central rule is no invented employers, dates, numbers or outcomes — it asks instead, and defaults `depth` to `working` rather than raising it to flatter.
+- **Stale proposals are refused.** An update records the hash of the file it was built against; if the file changed since, accepting is a conflict, not an overwrite. Acceptance also re-validates rather than trusting the proposal-time result.
+- **Dependencies are ordered.** A fact proposed under a role proposed in the same message is validated as if the role existed, with an explicit dependency: accepting the fact first is refused with a reason.
+- **A revised proposal supersedes the old one,** so the stale version cannot be accepted by mistake.
+- **Deletion cannot be proposed.** It stays a deliberate manual act.
+- **Accepting is held while the Form has unsaved edits,** which would otherwise collide with the change.
+
+Conversations are scoped — one per entry, one for the whole knowledge base — so "add that this handled 2,000 users" means something beside its entry. The open entry is passed to the agent as context. Each conversation is a file under `chats/` (gitignored: it is the career in the person's own words), so it survives a restart and navigating away; "the assistant is working" is held by the server, and a failure becomes an error turn rather than an endless spinner.
+
+Recall's tag proposals (AC-R10.4) are not yet routed into this inbox.
+
+### 6.9 The run workbench (R4, R5, R6)
+
+The compiled resume is on screen throughout, on the left; the tools — **Revise**, **Sources**, **Matches**, **Gaps** — are on the right.
+
+- **Looking and downloading are separate.** The Direct / Referral switch only changes which version is shown, inline, in the same pane. Nothing downloads until **Download PDF** or **.tex** is pressed. A **PDF | LaTeX** toggle shows the source in place with a copy button, for pasting into Overleaf.
+- **The review does not vanish during a revision.** The previous `validation.json` stays until the new one replaces it. While a revision runs the last verified PDF stays visible, labelled as such, and downloads are unavailable — the server answers `409 run_busy`, because between the Writer and the Validator finishing, `draft.json` is new text that has not been re-checked.
+- **A revision's answer shows what changed.** The model's own plain-language account (including anything it declined to do and why), a diff computed from the two drafts with no model involved, and the Validator's cuts with reasons — in the conversation where the request was made.
+- **Runs have display titles.** A title the person set, else the role the Analyst read, else the top of the posting. The folder name is permanent and is never the label.
 
 ## 7. Frontend
 

@@ -227,13 +227,15 @@ class Pipeline:
         run.write("draft", draft)
         return draft
 
-    async def validate(self, run: Run, draft: dict[str, Any], selection: Selection) -> dict:
+    async def validate(
+        self, run: Run, draft: dict[str, Any], selection: Selection, *, force: bool = False
+    ) -> dict:
         """Always runs, including after a chat revision (AC-R5.2).
 
         Chat can never bypass validation, or "just add that I led the team"
         writes an unsupported claim straight into the document.
         """
-        if run.has("validation"):
+        if run.has("validation") and not force:
             self.on_progress("validator", "skipped", {"reason": "already complete"})
             return run.read("validation")
 
@@ -362,8 +364,13 @@ class Pipeline:
         )
         run.write("draft", draft)
 
-        run.path("validation").unlink(missing_ok=True)
-        validation = await self.validate(run, draft, selection)
+        # `force`, not deleting the file. The old code removed validation.json to
+        # make `validate` run again — but "this run is complete" is defined as
+        # "validation.json exists", so for the whole minute or two of every
+        # revision the review screen (preview and chat included) was replaced by
+        # the pipeline panel. The previous validation now stays until the new
+        # one atomically replaces it.
+        validation = await self.validate(run, draft, selection, force=True)
 
         # What changed is computed from the two drafts, with no model involved;
         # the model's own account is shown beside it. The account is a claim,

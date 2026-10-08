@@ -44,7 +44,7 @@ from ..kb.write import (
 )
 from ..kb.yamlio import load_yaml
 from ..pipeline import curator
-from ..pipeline.artifacts import Run, list_runs, run_slug
+from ..pipeline.artifacts import Run, guess_role, list_runs, run_slug
 from ..pipeline.orchestrator import Pipeline
 from ..pipeline.report import render_gap_report
 from ..render.compile import compile_pdf
@@ -77,8 +77,17 @@ class Context:
         #: The knowledge-base chat lives on disk (so it survives a restart and a
         #: page change) but "the assistant is thinking" can only be held by the
         #: process that owns the task.
-        self.chat = curator.ChatStore(self.root / "chats")
-        self.chat_running = False
+        self.chats_dir = self.root / "chats"
+        self.chat_running: set[str] = set()
+
+    def chat_for(self, scope: str) -> curator.ChatStore:
+        try:
+            return curator.ChatStore(self.chats_dir, scope)
+        except ValueError as exc:
+            raise WriteError(
+                str(exc),
+                remedy="A scope is an entry id (lowercase letters, digits, hyphens) or `kb`.",
+            ) from exc
 
     def corpus(self):
         return load_corpus(self.kb_dir)
@@ -201,17 +210,20 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
     # -- knowledge-base chat (AC-R13.2, spec-04 §6.8) ---------------------------
 
     @router.get("/kb/chat")
-    async def kb_chat_history() -> dict[str, Any]:
-        return {"turns": context.chat.load(), "running": context.chat_running}
+    async def kb_chat_history(scope: str = Query(curator.GLOBAL_SCOPE)) -> dict[str, Any]:
+        store = context.chat_for(scope)
+        return {"turns": store.load(), "running": scope in context.chat_running, "scope": scope}
 
     @router.post("/kb/chat")
     async def kb_chat_send(payload: dict = Body(...)) -> dict[str, Any]:
+        scope = payload.get("scope") or curator.GLOBAL_SCOPE
+        store = context.chat_for(scope)
         message = (payload.get("message") or "").strip()
         if not message:
             raise WriteError(
                 "no message", remedy="Tell the assistant what you did or what to change."
             )
-        if context.chat_running:
+        if scope in context.chat_running:
             raise WriteError(
                 "the assistant is still working on your last message",
                 remedy="Wait for it to finish — it will appear in the conversation.",
@@ -219,25 +231,29 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
 
         # The person's turn is written immediately, so it is on screen while the
         # assistant works and survives navigating away.
-        context.chat.append({"role": "user", "at": curator.now(), "text": message})
-        context.chat_running = True
-        asyncio.create_task(_curate(context, message))
+        store.append({"role": "user", "at": curator.now(), "text": message})
+        context.chat_running.add(scope)
+        asyncio.create_task(_curate(context, scope, message, payload.get("focus")))
         return {"running": True}
 
     @router.post("/kb/chat/proposals/{proposal_id}/accept")
-    async def kb_chat_accept(proposal_id: str) -> dict[str, Any]:
+    async def kb_chat_accept(
+        proposal_id: str, scope: str = Query(curator.GLOBAL_SCOPE)
+    ) -> dict[str, Any]:
         proposal = curator.accept(
-            context.kb_dir, context.chat, proposal_id, cache_dir=context.cache_dir
+            context.kb_dir, context.chat_for(scope), proposal_id, cache_dir=context.cache_dir
         )
         return {"proposal": proposal}
 
     @router.post("/kb/chat/proposals/{proposal_id}/reject")
-    async def kb_chat_reject(proposal_id: str) -> dict[str, Any]:
-        return {"proposal": curator.reject(context.chat, proposal_id)}
+    async def kb_chat_reject(
+        proposal_id: str, scope: str = Query(curator.GLOBAL_SCOPE)
+    ) -> dict[str, Any]:
+        return {"proposal": curator.reject(context.chat_for(scope), proposal_id)}
 
     @router.delete("/kb/chat")
-    async def kb_chat_reset() -> dict[str, Any]:
-        archived = context.chat.archive()
+    async def kb_chat_reset(scope: str = Query(curator.GLOBAL_SCOPE)) -> dict[str, Any]:
+        archived = context.chat_for(scope).archive()
         return {"archived": archived.name if archived else None}
 
     @router.get("/kb/validate")
@@ -353,6 +369,8 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
             "runs": [
                 {
                     "id": run.id,
+                    "title": run.title(),
+                    "company": run.company(),
                     "stages": run.completed_stages(),
                     "running": run.id in context.active_runs,
                     "complete": run.has("validation"),
@@ -366,11 +384,37 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         run = _run_or_404(context, run_id)
         return {
             "id": run.id,
+            "title": run.title(),
+            "company": run.company(),
             "stages": run.completed_stages(),
             "running": run.id in context.active_runs,
             "complete": run.has("validation"),
             **{stage: run.read(stage) for stage in run.completed_stages()},
         }
+
+    @router.patch("/runs/{run_id}")
+    async def runs_rename(run_id: str, payload: dict = Body(...)) -> dict[str, Any]:
+        """Change what a run is *called*, never where it lives.
+
+        The folder name is permanent — applications and snapshots refer to it —
+        so this sets a display title in `meta.json` instead of renaming anything.
+        """
+        run = _run_or_404(context, run_id)
+        meta = dict(run.meta())
+        for key in ("title", "company"):
+            if key in payload:
+                value = payload[key]
+                if value is not None and not isinstance(value, str):
+                    raise WriteError(f"{key} must be text", remedy="Send a string.")
+                value = (value or "").strip()
+                if len(value) > 120:
+                    raise WriteError(f"{key} is too long", remedy="Keep it under 120 characters.")
+                if value:
+                    meta[key] = value
+                else:
+                    meta.pop(key, None)  # clearing falls back to the computed title
+        run.write("meta", meta)
+        return {"id": run.id, "title": run.title(), "company": run.company()}
 
     @router.get("/runs/{run_id}/events")
     async def runs_events(run_id: str) -> StreamingResponse:
@@ -389,8 +433,14 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
                 remedy="Paste the posting, or fetch a URL and confirm the extracted text first.",
             )
 
-        run = Run.create(context.runs_dir, run_slug(payload.get("role"), payload.get("company")))
+        company = (payload.get("company") or "").strip() or None
+        # The web form sends only the posting and an optional company, so with no
+        # role supplied every run was folder-named "…-untitled". The posting
+        # opens with the job title far more often than not.
+        role = (payload.get("role") or "").strip() or guess_role(posting)
+        run = Run.create(context.runs_dir, run_slug(role, company))
         run.write("posting", posting)
+        run.write("meta", {"company": company} if company else {})
 
         # Returns immediately; progress arrives on the SSE channel. A tailoring
         # run takes minutes, which is far longer than any sensible HTTP
@@ -409,6 +459,11 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         message = (payload.get("message") or "").strip()
         if not message:
             raise WriteError("no message", remedy="Say what you want changed.")
+        if run.id in context.active_runs:
+            raise errors.RunBusy(
+                "this run is already being revised",
+                remedy="Wait for it to finish — the answer will appear in the conversation.",
+            )
 
         # Recorded here, synchronously, rather than inside the task: the page
         # refetches the moment this returns, and the person's own message must
@@ -417,6 +472,10 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         history.append({"role": "user", "text": message})
         run.write("chat", history)
 
+        # Marked busy here, not only inside the task: the page refetches the
+        # instant this returns, and would otherwise see "not running" for the
+        # split second before the task body starts.
+        context.active_runs.add(run.id)
         asyncio.create_task(_revise(context, run, message))
         return {"run_id": run.id, "events": f"/api/runs/{run.id}/events"}
 
@@ -609,14 +668,15 @@ def _written(result) -> dict[str, Any]:
     }
 
 
-async def _curate(context: Context, message: str) -> None:
+async def _curate(context: Context, scope: str, message: str, focus: dict | None) -> None:
     """One curator turn, written to the conversation file when it finishes.
 
     Failures become a turn too — an `error` the page can show — rather than
     vanishing into a log: the person is watching a box that says "thinking".
     """
+    store = context.chat_for(scope)
     try:
-        history = context.chat.load()[:-1]  # everything before this message
+        history = store.load()[:-1]  # everything before this message
         turn = await curator.curate(
             build_backend(context.config),
             context.corpus(),
@@ -624,13 +684,14 @@ async def _curate(context: Context, message: str) -> None:
             context.config,
             history,
             message,
+            focus,
         )
-        turns = context.chat.load()
+        turns = store.load()
         curator.supersede(turns, turn)
         turns.append(turn)
-        context.chat.save(turns)
+        store.save(turns)
     except Exception as exc:
-        context.chat.append(
+        store.append(
             {
                 "role": "assistant",
                 "at": curator.now(),
@@ -641,7 +702,7 @@ async def _curate(context: Context, message: str) -> None:
             }
         )
     finally:
-        context.chat_running = False
+        context.chat_running.discard(scope)
 
 
 def _download_name(run_id: str, path: Path) -> str:
@@ -751,6 +812,19 @@ def _export(context: Context, run_id: str, contact_set: str | None, *, compile_t
     from ..kb.identity import load_identity
 
     run = _run_or_404(context, run_id)
+    if run_id in context.active_runs:
+        # Between the Writer finishing and the Validator finishing, draft.json is
+        # the NEW draft and validation.json is still the OLD one. Exporting then
+        # would apply old cuts to new text and could hand over a draft whose
+        # claims have not been checked — the one thing the validator exists to
+        # prevent. So nothing is exported until the revision is done.
+        raise errors.RunBusy(
+            "this run is being revised",
+            remedy=(
+                "The download is available again as soon as the revision finishes "
+                "and its claims are re-checked."
+            ),
+        )
     if not run.has("draft"):
         raise NotFound(
             f"run {run_id} has no draft yet",

@@ -416,3 +416,112 @@ async def test_validator_findings_reach_the_conversation(kb: Path, tmp_path: Pat
     turn = run.read("chat")[-1]
     assert turn["clean"] is False
     assert turn["cuts"][0]["reason"] == "no source says so"
+
+
+# -- run names ---------------------------------------------------------------
+
+
+def test_a_run_with_no_known_role_is_not_called_untitled() -> None:
+    """The web form sent only a posting and a company, so every run it created
+    was folder-named "…-untitled"."""
+    from datetime import date
+
+    slug = run_slug(None, "Visa", on=date(2026, 10, 8))
+    assert slug == "2026-10-08-visa"
+    assert "untitled" not in slug
+    assert run_slug(None, None, on=date(2026, 10, 8)) == "2026-10-08-posting"
+
+
+@pytest.mark.parametrize(
+    ("posting", "expected"),
+    [
+        ("Senior Backend Engineer\nWe are hiring.", "Senior Backend Engineer"),
+        ("# Staff ML Engineer\n\nAbout us", "Staff ML Engineer"),
+        ("Job Title: Platform Engineer\nLocation: Remote", "Platform Engineer"),
+        ("**Data Engineer**\n", "Data Engineer"),
+        ("\n\n  Role - Site Reliability Engineer  \n", "Site Reliability Engineer"),
+        ("", None),
+        ("a\nb", None),
+    ],
+)
+def test_the_role_is_guessed_from_the_top_of_the_posting(posting: str, expected) -> None:
+    from resume_tailor.pipeline.artifacts import guess_role
+
+    assert guess_role(posting) == expected
+
+
+def test_a_run_is_titled_by_the_analysts_reading_first(tmp_path: Path) -> None:
+    """The folder name is permanent and was never meant to be the label."""
+    run = Run.create(tmp_path / "runs", "2026-10-07-visa-untitled")
+    assert run.title() == "Visa"  # humanised id, nothing else known
+    run.write("posting", "SW Engineer (Java)\nDetails.")
+    assert run.title() == "SW Engineer (Java)"  # then the top of the posting
+    run.write("requirements", {"role_title": "Software Engineer, GenAI"})
+    assert run.title() == "Software Engineer, GenAI"  # then what the Analyst understood
+    run.write("meta", {"title": "My own name for it"})
+    assert run.title() == "My own name for it"  # a person's choice outranks all of it
+
+
+def test_the_id_is_made_readable_as_a_last_resort() -> None:
+    from resume_tailor.pipeline.artifacts import humanise_id
+
+    assert humanise_id("2026-10-07-visa-untitled") == "Visa"
+    assert humanise_id("2026-10-07-hirojet-1-untitled") == "Hirojet"
+    assert humanise_id("2026-10-08-acme-ml-engineer") == "Acme Ml Engineer"
+
+
+def test_a_leading_about_us_is_not_taken_for_the_title() -> None:
+    """Boilerplate openers are skipped. The guess is only for naming a folder
+    and labelling a run until the Analyst reads it properly, so being merely
+    sensible is enough — it need not be right."""
+    from resume_tailor.pipeline.artifacts import guess_role
+
+    assert guess_role("About us\nWe build things.") != "About us"
+
+
+# -- a revision must not make the run look unfinished ------------------------
+
+
+async def test_the_previous_validation_survives_a_revision(kb: Path, tmp_path: Path) -> None:
+    """Found by using it. A run counts as complete when validation.json exists,
+    and the revise path deleted that file to force a re-run — so for the whole
+    minute or two of every revision the review screen, with its preview and
+    chat, was replaced by the pipeline panel."""
+    run = Run.create(tmp_path / "runs", "stays-complete")
+    corpus = load_corpus(kb)
+    await Pipeline(FakeRunner(REPLIES), corpus, Config()).run(run, POSTING)
+
+    present_during: list[bool] = []
+
+    def writer(_prompt: str):
+        present_during.append(run.has("validation"))
+        return REVISED
+
+    def validator(_prompt: str):
+        present_during.append(run.has("validation"))
+        return VALIDATION
+
+    await Pipeline(
+        FakeRunner({**REPLIES, "writer": writer, "validator": validator}), corpus, Config()
+    ).revise(run, "Shorter.")
+
+    assert present_during == [True, True], "validation.json vanished mid-revision"
+
+
+async def test_the_new_validation_replaces_the_old_one(kb: Path, tmp_path: Path) -> None:
+    """Keeping the file must not mean keeping the verdict."""
+    run = Run.create(tmp_path / "runs", "replaced")
+    corpus = load_corpus(kb)
+    await Pipeline(FakeRunner(REPLIES), corpus, Config()).run(run, POSTING)
+    assert run.read("validation")["clean"] is True
+
+    cut = {
+        "verdict": "changes_made",
+        "clean": False,
+        "warnings": [],
+        "cuts": [{"bullet": "x", "reason": "unsupported"}],
+    }
+    await Pipeline(
+        FakeRunner({**REPLIES, "writer": REVISED, "validator": cut}), corpus, Config()
+    ).revise(run, "Say I led a team.")
+    assert run.read("validation")["clean"] is False

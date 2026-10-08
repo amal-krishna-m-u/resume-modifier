@@ -1,6 +1,6 @@
 import type {
   ApplicationRow, Divergence, Draft, Entry, Gap, Health, Issue, KbIndex, RunDetail,
-  Snapshot, StageEvent, Validation,
+  KbChatTurn, Proposal, RevisionTurn, RunSummary, Snapshot, StageEvent, Validation,
 } from "./types";
 
 export class RequestFailed extends Error {
@@ -96,11 +96,14 @@ export const api = {
       body: JSON.stringify({ sha }),
     }),
 
-  runs: () =>
-    request<{
-      runs: { id: string; stages: string[]; running: boolean; complete: boolean }[];
-    }>("/runs"),
+  runs: () => request<{ runs: RunSummary[] }>("/runs"),
   run: (id: string) => request<RunDetail>(`/runs/${id}`),
+
+  renameRun: (id: string, patch: { title?: string | null; company?: string | null }) =>
+    request<{ id: string; title: string; company: string | null }>(`/runs/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    }),
   gapReport: (id: string) => request<{ markdown: string }>(`/runs/${id}/gap-report`),
 
   startRun: (text: string, company?: string, role?: string) =>
@@ -116,7 +119,36 @@ export const api = {
     }),
 
   chatHistory: (id: string) =>
-    request<{ turns: { role: string; text: string; clean?: boolean }[] }>(`/runs/${id}/chat`),
+    request<{ turns: RevisionTurn[] }>(`/runs/${id}/chat`),
+
+  // -- knowledge-base chat ---------------------------------------------------
+  kbChat: (scope: string) =>
+    request<{ turns: KbChatTurn[]; running: boolean; scope: string }>(
+      `/kb/chat?scope=${encodeURIComponent(scope)}`,
+    ),
+
+  kbChatSend: (scope: string, message: string, focus?: Record<string, unknown>) =>
+    request<{ running: boolean }>("/kb/chat", {
+      method: "POST",
+      body: JSON.stringify({ scope, message, focus }),
+    }),
+
+  kbChatAccept: (scope: string, proposalId: string) =>
+    request<{ proposal: Proposal }>(
+      `/kb/chat/proposals/${proposalId}/accept?scope=${encodeURIComponent(scope)}`,
+      { method: "POST" },
+    ),
+
+  kbChatReject: (scope: string, proposalId: string) =>
+    request<{ proposal: Proposal }>(
+      `/kb/chat/proposals/${proposalId}/reject?scope=${encodeURIComponent(scope)}`,
+      { method: "POST" },
+    ),
+
+  kbChatReset: (scope: string) =>
+    request<{ archived: string | null }>(`/kb/chat?scope=${encodeURIComponent(scope)}`, {
+      method: "DELETE",
+    }),
 
   promote: (runId: string, body: Record<string, unknown>) =>
     request<{ id: string; directory: string; rendered: string[] }>(`/runs/${runId}/promote`, {

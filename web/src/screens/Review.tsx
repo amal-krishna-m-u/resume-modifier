@@ -1,4 +1,5 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Inline } from "../lib/inline";
 import { labelFor } from "../lib/roles";
 import type {
@@ -15,6 +16,16 @@ import type {
  * Nothing here hides the Validator's work. A cut claim usually means a real
  * fact is missing from the knowledge base rather than that the Writer invented
  * something, so it is shown with its reason rather than quietly applied. */
+/** The run workbench (R4, R5).
+ *
+ * The compiled resume is on screen the whole time, on the left. The tools —
+ * revise, sources, matches, gaps — are on the right. So revising is a
+ * conversation with the document in view, and the preview updates beside it,
+ * instead of the document being one tab away from the thing that changes it.
+ *
+ * Nothing here hides the Validator's work. A cut claim usually means a real
+ * fact is missing from the knowledge base rather than that the Writer invented
+ * something, so it is shown with its reason rather than quietly applied. */
 export function Review({
   requirements,
   merged,
@@ -25,6 +36,7 @@ export function Review({
   contactSets,
   entries,
   version,
+  revising,
   chat,
 }: {
   requirements: { role_title?: string; requirements: Requirement[] };
@@ -37,62 +49,64 @@ export function Review({
   entries: IndexRow[];
   /** Changes whenever the draft does, so the preview reloads after a revision. */
   version: number;
-  /** The revise box. Sits beside the preview, so a change and its effect are
-   * on screen together instead of a scroll apart. */
-  chat?: ReactNode;
+  /** A revision is running: the preview is about to change. */
+  revising: boolean;
+  chat: ReactNode;
 }) {
-  const [tab, setTab] = useState<"resume" | "matches" | "gaps" | "draft">("resume");
+  const [tab, setTab] = useState<"revise" | "sources" | "matches" | "gaps">("revise");
 
   const absent = gaps.filter((gap) => gap.status === "absent");
   const weak = gaps.filter((gap) => gap.status === "weak");
   const covered = requirements.requirements.length - gaps.length;
+  const flagged = validation.cuts.length + validation.warnings.length;
 
   return (
     <div>
       <ExportNotice
         validation={validation}
         gaps={gaps}
-        onReview={() => setTab(absent.length + weak.length > 0 ? "gaps" : "draft")}
+        onReview={() => setTab(absent.length + weak.length > 0 ? "gaps" : "sources")}
       />
 
-      <div className="flex gap-1 overflow-x-auto border-b border-stone-200 dark:border-stone-800">
-        <Tab active={tab === "resume"} onClick={() => setTab("resume")}>
-          Resume
-        </Tab>
-        <Tab active={tab === "draft"} onClick={() => setTab("draft")}>
-          Sources
-          {!validation.clean && (
-            <Pill tone="amber">{validation.cuts.length + validation.warnings.length}</Pill>
-          )}
-        </Tab>
-        <Tab active={tab === "matches"} onClick={() => setTab("matches")}>
-          Matches <Pill>{merged.counts.total}</Pill>
-        </Tab>
-        <Tab active={tab === "gaps"} onClick={() => setTab("gaps")}>
-          Gaps
-          {gaps.length > 0 && <Pill tone={absent.length ? "red" : "amber"}>{gaps.length}</Pill>}
-        </Tab>
-      </div>
+      <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)] gap-6 items-start">
+        <PreviewPane
+          runId={runId}
+          contactSets={contactSets}
+          version={version}
+          revising={revising}
+        />
 
-      <div className="py-6">
-        {tab === "resume" && (
-          <Preview
-            runId={runId}
-            contactSets={contactSets}
-            version={version}
-            chat={chat}
-          />
-        )}
-        {tab === "draft" && (
-          <DraftPanel draft={draft} validation={validation} entries={entries} />
-        )}
-        {tab === "matches" && (
-          <MatchesPanel requirements={requirements.requirements} merged={merged} />
-        )}
-        {tab === "gaps" && (
-          <GapsPanel absent={absent} weak={weak} covered={covered} merged={merged} />
-        )}
-        {tab !== "resume" && chat && <div className="mt-8">{chat}</div>}
+        <section className="min-w-0">
+          <div className="flex gap-1 overflow-x-auto border-b border-stone-200 dark:border-stone-800">
+            <Tab active={tab === "revise"} onClick={() => setTab("revise")}>
+              Revise
+            </Tab>
+            <Tab active={tab === "sources"} onClick={() => setTab("sources")}>
+              Sources
+              {flagged > 0 && <Pill tone="amber">{flagged}</Pill>}
+            </Tab>
+            <Tab active={tab === "matches"} onClick={() => setTab("matches")}>
+              Matches <Pill>{merged.counts.total}</Pill>
+            </Tab>
+            <Tab active={tab === "gaps"} onClick={() => setTab("gaps")}>
+              Gaps
+              {gaps.length > 0 && <Pill tone={absent.length ? "red" : "amber"}>{gaps.length}</Pill>}
+            </Tab>
+          </div>
+
+          <div className="py-5">
+            {tab === "revise" && chat}
+            {tab === "sources" && (
+              <DraftPanel draft={draft} validation={validation} entries={entries} />
+            )}
+            {tab === "matches" && (
+              <MatchesPanel requirements={requirements.requirements} merged={merged} />
+            )}
+            {tab === "gaps" && (
+              <GapsPanel absent={absent} weak={weak} covered={covered} merged={merged} />
+            )}
+          </div>
+        </section>
       </div>
     </div>
   );
@@ -113,7 +127,25 @@ function DraftPanel({
   const warnings = new Map(validation.warnings.map((warning) => [warning.bullet, warning]));
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[1fr_20rem] gap-8 items-start">
+    <div className="space-y-6">
+      <aside className="card p-4 text-sm">
+        <h3 className="font-semibold">Validator</h3>
+        {validation.clean ? (
+          <p className="mt-1 text-emerald-700 dark:text-emerald-400">
+            Every claim traces to a cited fact.
+          </p>
+        ) : (
+          <>
+            <p className="mt-1 text-stone-600 dark:text-stone-400">
+              {validation.cuts.length} cut, {validation.warnings.length} flagged.
+            </p>
+            <p className="mt-2 text-xs text-stone-500 leading-relaxed">
+              A cut usually means a real fact is missing from your knowledge base, not that
+              the writer invented something. Adding it is the fix.
+            </p>
+          </>
+        )}
+      </aside>
       <article className="space-y-6">
         {draft.summary && (
           <section>
@@ -196,25 +228,6 @@ function DraftPanel({
           );
         })}
       </article>
-
-      <aside className="rounded border border-stone-200 dark:border-stone-800 p-4 text-sm sticky top-20">
-        <h3 className="font-semibold">Validator</h3>
-        {validation.clean ? (
-          <p className="mt-2 text-emerald-700 dark:text-emerald-400">
-            Every claim traces to a cited fact.
-          </p>
-        ) : (
-          <>
-            <p className="mt-2 text-stone-600 dark:text-stone-400">
-              {validation.cuts.length} cut, {validation.warnings.length} flagged.
-            </p>
-            <p className="mt-3 text-xs text-stone-500 leading-relaxed">
-              A cut usually means a real fact is missing from your knowledge base, not that
-              the writer invented something. Adding it is the fix.
-            </p>
-          </>
-        )}
-      </aside>
     </div>
   );
 }
@@ -589,25 +602,51 @@ function ExportNotice({
 
 /* ---------------------------------------------------------------- preview */
 
-/** The compiled resume, as it would be sent.
+/** The compiled resume, as it would be sent — and the only place anything is
+ * downloaded from.
  *
- * The sources tab shows provenance; this shows the deliverable. Reviewing a
- * resume as text and discovering how it laid out only after export is the
- * wrong order — a bullet that wraps to a third line or pushes onto page two is
- * only visible here. */
-function Preview({
+ * Choosing "Direct" or "Referral" only changes which version you are looking
+ * at. An earlier version made those buttons *downloads*, so clicking one to see
+ * it saved a file instead. Looking and downloading are separate acts: switch to
+ * see, then press Download.
+ *
+ * Reviewing a resume as text and discovering how it laid out only after export
+ * is the wrong order — a bullet that wraps to a third line or pushes onto page
+ * two is only visible here. */
+function PreviewPane({
   runId,
   contactSets,
   version,
-  chat,
+  revising,
 }: {
   runId: string;
   contactSets: string[];
   version: number;
-  chat?: ReactNode;
+  revising: boolean;
 }) {
   const [set, setSet] = useState(contactSets[0] ?? "");
+  const [view, setView] = useState<"pdf" | "latex">("pdf");
   const active = contactSets.includes(set) ? set : (contactSets[0] ?? "");
+
+  // Fetched only when asked for, and as text: the point is to read it or paste
+  // it into Overleaf, not to download it.
+  const tex = useQuery({
+    queryKey: ["tex", runId, active, version],
+    queryFn: async () => {
+      const response = await fetch(`/api/runs/${runId}/export.tex?contact_set=${active}`);
+      if (!response.ok) throw new Error("could not load the LaTeX source");
+      return response.text();
+    },
+    enabled: view === "latex" && active !== "",
+  });
+  const [copied, setCopied] = useState(false);
+
+  // Opening the page mid-revision, the server will not render the unverified
+  // draft, so there is nothing to show yet — say so rather than load an error.
+  const [shown, setShown] = useState(!revising);
+  useEffect(() => {
+    if (!revising) setShown(true);
+  }, [revising]);
 
   if (contactSets.length === 0) {
     return (
@@ -619,48 +658,124 @@ function Preview({
   }
 
   const src = `/api/runs/${runId}/export.pdf?inline=true&contact_set=${active}&v=${version}#toolbar=0&navpanes=0&view=FitH`;
+  const downloadPdf = `/api/runs/${runId}/export.pdf?contact_set=${active}`;
+  const downloadTex = `/api/runs/${runId}/export.tex?contact_set=${active}`;
+  const height = "calc(100vh - 14rem)";
 
   return (
-    <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,48rem)_minmax(0,1fr)] gap-8 items-start">
-      {/* Sized to the viewport rather than to an A4 aspect ratio. A 1,175px
-          frame pushed everything else — including the revise box — far below
-          the fold; the viewer scrolls within it instead. */}
-      <div className="card overflow-hidden bg-white">
-        <iframe
-          key={src}
-          title="Compiled resume"
-          src={src}
-          className="block w-full"
-          style={{ height: "calc(100vh - 11rem)", minHeight: "34rem" }}
-        />
-      </div>
-
-      <aside className="space-y-5 lg:sticky lg:top-20">
+    <div className="space-y-3 lg:sticky lg:top-20">
+      <div className="flex flex-wrap items-center gap-2">
         {contactSets.length > 1 && (
-          <div>
-            <div className="text-xs font-medium text-stone-500 mb-1.5">Contact details</div>
-            <div className="flex rounded-md border border-stone-300 dark:border-stone-700 overflow-hidden text-sm">
-              {contactSets.map((name) => (
-                <button
-                  key={name}
-                  onClick={() => setSet(name)}
-                  className={`flex-1 px-3 py-1.5 capitalize ${
-                    name === active
-                      ? "bg-stone-900 text-stone-50 dark:bg-stone-100 dark:text-stone-900 font-medium"
-                      : "hover:bg-stone-100 dark:hover:bg-stone-900"
-                  }`}
-                >
-                  {name}
-                </button>
-              ))}
-            </div>
-            <p className="mt-1.5 text-[11px] text-stone-400 leading-snug">
-              Same tailored content — only the contact line differs.
-            </p>
+          <div
+            className="flex rounded-md border border-stone-300 dark:border-stone-700 overflow-hidden text-sm"
+            role="tablist"
+            aria-label="Which version to show"
+          >
+            {contactSets.map((name) => (
+              <button
+                key={name}
+                role="tab"
+                aria-selected={name === active}
+                onClick={() => setSet(name)}
+                disabled={revising}
+                className={`px-3 py-1.5 capitalize disabled:opacity-50 ${
+                  name === active
+                    ? "bg-stone-900 text-stone-50 dark:bg-stone-100 dark:text-stone-900 font-medium"
+                    : "hover:bg-stone-100 dark:hover:bg-stone-900"
+                }`}
+              >
+                {name}
+              </button>
+            ))}
           </div>
         )}
-        {chat}
-      </aside>
+
+        <div className="flex rounded-md border border-stone-300 dark:border-stone-700 overflow-hidden text-xs">
+          {(["pdf", "latex"] as const).map((name) => (
+            <button
+              key={name}
+              onClick={() => setView(name)}
+              className={`px-2.5 py-1.5 ${
+                view === name ? "bg-stone-200 dark:bg-stone-800 font-medium" : ""
+              }`}
+            >
+              {name === "pdf" ? "PDF" : "LaTeX"}
+            </button>
+          ))}
+        </div>
+
+        <div className="ml-auto flex items-center gap-2">
+          {/* Refused by the server mid-revision (the new draft has not been
+              re-checked yet), so the button says so instead of failing. */}
+          <a
+            href={revising ? undefined : downloadPdf}
+            download
+            aria-disabled={revising}
+            title={revising ? "Available when the revision finishes" : undefined}
+            className={`btn-primary ${revising ? "opacity-40 pointer-events-none" : ""}`}
+          >
+            Download PDF
+          </a>
+          <a
+            href={revising ? undefined : downloadTex}
+            download
+            aria-disabled={revising}
+            title={revising ? "Available when the revision finishes" : undefined}
+            className={`btn-secondary ${revising ? "opacity-40 pointer-events-none" : ""}`}
+          >
+            .tex
+          </a>
+        </div>
+      </div>
+
+      <div className="card relative overflow-hidden bg-white dark:bg-stone-900">
+        {view === "pdf" && !shown ? (
+          <div
+            className="flex items-center justify-center text-sm text-stone-500"
+            style={{ height, minHeight: "32rem" }}
+          >
+            A revision is in progress — the resume will appear when it finishes.
+          </div>
+        ) : view === "pdf" ? (
+          <iframe
+            key={src}
+            title="Compiled resume"
+            src={src}
+            className="block w-full bg-white"
+            style={{ height, minHeight: "32rem" }}
+          />
+        ) : (
+          <div className="relative" style={{ height, minHeight: "32rem" }}>
+            <button
+              onClick={async () => {
+                if (!tex.data) return;
+                await navigator.clipboard.writeText(tex.data);
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1800);
+              }}
+              disabled={!tex.data}
+              className="btn-secondary absolute right-3 top-3 z-10 text-xs"
+            >
+              {copied ? "Copied" : "Copy"}
+            </button>
+            <pre className="h-full overflow-auto p-4 pr-20 text-[11px] leading-relaxed font-mono text-stone-700 dark:text-stone-300">
+              {tex.isLoading ? "Loading…" : tex.isError ? "Could not load the LaTeX source." : tex.data}
+            </pre>
+          </div>
+        )}
+
+        {revising && (
+          <div className="pointer-events-none absolute right-3 top-3 rounded-md bg-stone-900/90 px-2.5 py-1 text-[11px] text-stone-50 shadow">
+            Showing the last verified version — updating…
+          </div>
+        )}
+      </div>
+
+      <p className="text-[11px] text-stone-400 leading-snug">
+        Showing the <strong className="font-medium capitalize">{active}</strong> version.
+        {contactSets.length > 1 && " Same tailored content — only the contact line differs."}{" "}
+        Switching only changes what you see; nothing downloads until you press Download.
+      </p>
     </div>
   );
 }

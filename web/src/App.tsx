@@ -103,7 +103,7 @@ export function App() {
                 key={run.id}
                 onClick={() => navigate({ name: "run", id: run.id })}
                 className="flex items-center gap-2 rounded border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 px-2.5 py-1 text-xs"
-                title={run.id}
+                title={run.title}
               >
                 <span className="size-1.5 rounded-full bg-sky-500 animate-pulse" />
                 <span className="max-w-40 truncate">
@@ -132,7 +132,8 @@ export function App() {
                 {runs.data.runs.map((run) => (
                   <option key={run.id} value={run.id}>
                     {run.running ? "● " : run.complete ? "" : "· "}
-                    {run.id}
+                    {run.title}
+                    {run.company ? ` — ${run.company}` : ""}
                   </option>
                 ))}
               </select>

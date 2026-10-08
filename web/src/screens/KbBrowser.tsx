@@ -4,6 +4,7 @@ import { api } from "../lib/api";
 import type { IndexRow } from "../lib/types";
 import { EntryEditor } from "../components/EntryEditor";
 import { NewEntry } from "../components/NewEntry";
+import { KbChat } from "../components/KbChat";
 import { GUIDES } from "../lib/guidance";
 import { byRecency, range } from "../lib/roles";
 
@@ -11,6 +12,7 @@ const OTHER_TYPES = ["project", "blog", "education", "certification", "award"] a
 
 type View =
   | { kind: "empty" }
+  | { kind: "chat" }
   | { kind: "pick" }
   | { kind: "create"; type: string; parent?: string }
   | { kind: "edit"; type: string; id: string };
@@ -105,6 +107,12 @@ export function KbBrowser() {
             + New
           </button>
         </div>
+        <button
+          onClick={() => go({ kind: "chat" })}
+          className={`btn-secondary w-full ${view.kind === "chat" ? "bg-stone-100 dark:bg-stone-900" : ""}`}
+        >
+          Add by chat
+        </button>
 
         {validation.data && !validation.data.ok && (
           <div className="rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 p-3 text-xs">
@@ -208,7 +216,24 @@ export function KbBrowser() {
       </aside>
 
       <section className="min-w-0">
-        {view.kind === "pick" ? (
+        {view.kind === "chat" ? (
+          <div className="max-w-3xl">
+            <KbChat
+              scope="kb"
+              entries={entries}
+              heading="Add to your knowledge base by chat"
+              starters={[
+                { label: "Record something I did", text: "I want to record something I did at " },
+                { label: "I started a new job", text: "I started a new role at " },
+                {
+                  label: "Find what's missing",
+                  text: "Ask me questions about my experience so we can find what's missing from my knowledge base.",
+                },
+              ]}
+              onOpenEntry={(type, id) => go({ kind: "edit", type, id })}
+            />
+          </div>
+        ) : view.kind === "pick" ? (
           <NewEntry
             onPick={(type, parent) => go({ kind: "create", type, parent })}
             onCancel={() => go({ kind: "empty" })}
@@ -230,6 +255,7 @@ export function KbBrowser() {
             type={view.type}
             id={view.id}
             onDirtyChange={onDirtyChange}
+            onOpen={(type, id) => go({ kind: "edit", type, id })}
             onDeleted={() => {
               dirty.current = false;
               setView({ kind: "empty" });
@@ -242,6 +268,7 @@ export function KbBrowser() {
             usage={usage.data}
             onOpen={open}
             onNew={() => go({ kind: "pick" })}
+            onChat={() => go({ kind: "chat" })}
           />
         )}
       </section>
@@ -350,12 +377,14 @@ function Overview({
   usage,
   onOpen,
   onNew,
+  onChat,
 }: {
   entries: IndexRow[];
   thin: IndexRow[];
   usage?: { runs: number; facts: Record<string, { runs: number; strong: number }> };
   onOpen: (entry: IndexRow) => void;
   onNew: () => void;
+  onChat: () => void;
 }) {
   // Ranked by how much real runs lean on each entry, not by thinness alone: a
   // thin internship no posting ever matches matters far less than a thin entry
@@ -432,9 +461,12 @@ function Overview({
         </p>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
+        <button onClick={onChat} className="btn-primary">
+          Add by chat
+        </button>
         <button onClick={onNew} className="btn-secondary">
-          + Add something new
+          + Add with the form
         </button>
       </div>
 

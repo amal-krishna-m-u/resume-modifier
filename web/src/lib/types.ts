@@ -141,6 +141,8 @@ export interface Gap {
 
 export interface RunDetail {
   id: string;
+  title: string;
+  company: string | null;
   stages: string[];
   running?: boolean;
   complete?: boolean;
@@ -194,4 +196,67 @@ export interface Snapshot {
   summary?: string;
   bullets: { lead?: string; text: string; sources: string[] }[];
   facts_as_sent: { id: string; body?: string; sha256?: string }[];
+}
+
+export interface RunSummary {
+  id: string;
+  title: string;
+  company: string | null;
+  stages: string[];
+  running: boolean;
+  complete: boolean;
+}
+
+/** What a revision actually changed — computed from the two drafts, not claimed. */
+export interface DraftChange {
+  kind: "summary" | "added" | "removed" | "changed" | "reordered" | "skills";
+  role_id?: string;
+  lead?: string | null;
+  before?: string | Record<string, string[]> | null;
+  after?: string | Record<string, string[]> | null;
+}
+
+export interface RevisionTurn {
+  role: "user" | "assistant";
+  text: string;
+  at?: string;
+  changes?: DraftChange[];
+  cuts?: { bullet: string; reason: string; replacement?: string | null }[];
+  warnings?: { bullet: string; reason: string; kind?: string }[];
+  clean?: boolean;
+}
+
+export interface ProposalIssue {
+  code: string;
+  field: string | null;
+  message: string;
+  entry?: string | null;
+}
+
+export interface Proposal {
+  id: string;
+  op: "create" | "update";
+  type: string;
+  entry_id: string;
+  title: string | null;
+  reason: string;
+  status: "pending" | "accepted" | "rejected" | "superseded";
+  fields: Record<string, unknown>;
+  fields_changed: { field: string; before: unknown; after: unknown }[];
+  body_before: string | null;
+  body_after: string;
+  body_added: string | null;
+  depends_on: string[];
+  errors: ProposalIssue[];
+  warnings: ProposalIssue[];
+  commit: string | null;
+}
+
+export interface KbChatTurn {
+  role: "user" | "assistant";
+  text: string;
+  at?: string;
+  error?: string;
+  questions?: string[];
+  proposals?: Proposal[];
 }

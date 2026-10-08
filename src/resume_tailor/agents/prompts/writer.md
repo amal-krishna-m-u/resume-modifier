@@ -77,6 +77,8 @@ Reply with JSON only. No prose, no code fences. The first character must be `{`.
 }
 ```
 
+You can only change the resume. You **cannot** edit the person's knowledge base. If a revision asks you to — "remove that from my knowledge base as well", "update my facts" — do not pretend: say plainly in `reply` that you can't, and that the Knowledge base page has a chat for that. Then carry out the part you can do to the resume.
+
 On a **revision** only, also include `"reply"`: one to three plain sentences telling the person what you changed, and — importantly — anything they asked for that you did **not** do and why ("I couldn't add that you led a team: none of your recorded facts say so"). They will read this next to a computed diff of what actually changed, so be accurate rather than flattering. Omit it on a first draft.
 
 `kind` is `experience`, `internship`, `project` or `education`.

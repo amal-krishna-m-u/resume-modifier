@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,7 +50,10 @@ from .corpus import estimate_tokens, render_corpus
 #: change what to propose next, and each costs prompt tokens on every call.
 HISTORY_TURNS = 12
 
-CHAT_NAME = "kb-chat.json"
+#: The conversation about the knowledge base as a whole.
+GLOBAL_SCOPE = "kb"
+
+_SCOPE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 
 def now() -> str:
@@ -60,16 +64,27 @@ def now() -> str:
 
 
 class ChatStore:
-    """The conversation, as one JSON file under `chats/`.
+    """A conversation, as one JSON file under `chats/`.
 
     A file rather than memory, so it survives a restart and so returning to the
     page after navigating away shows what happened — the same lesson as run
     progress. Gitignored: it is a record of your career in your own words.
+
+    **Scoped.** There is one conversation per entry being edited, plus one for
+    the knowledge base as a whole. Showing the whole history inside every
+    entry's editor would be noise, and "add that it served 2,000 users" only
+    means something next to the entry it is about.
     """
 
-    def __init__(self, directory: Path) -> None:
+    def __init__(self, directory: Path, scope: str = GLOBAL_SCOPE) -> None:
+        # The scope becomes part of a filename, and comes from a URL.
+        if not _SCOPE.match(scope):
+            raise ValueError(f"{scope!r} is not a valid conversation scope")
         self.directory = directory
-        self.path = directory / CHAT_NAME
+        self.scope = scope
+        stem = "kb-chat" if scope == GLOBAL_SCOPE else f"kb-chat--{scope}"
+        self.stem = stem
+        self.path = directory / f"{stem}.json"
 
     def load(self) -> list[dict[str, Any]]:
         if not self.path.is_file():
@@ -96,7 +111,7 @@ class ChatStore:
         """Start a fresh conversation without destroying the old one."""
         if not self.path.is_file():
             return None
-        target = self.directory / f"kb-chat-{datetime.now(UTC):%Y%m%d-%H%M%S}.json"
+        target = self.directory / f"{self.stem}-{datetime.now(UTC):%Y%m%d-%H%M%S}.json"
         os.replace(self.path, target)
         return target
 
@@ -238,6 +253,41 @@ def taxonomy_block(corpus: Corpus) -> str:
     return "\n".join(lines)
 
 
+def focus_block(kb_dir: Path, focus: dict[str, Any] | None) -> str:
+    """Where the person is, so "this" and "it" have something to point at.
+
+    Without it, "add that this handled 2,000 users" is unanswerable, and the
+    assistant either guesses which entry or interrogates the person about it.
+    """
+    if not focus:
+        return ""
+    entry_id = focus.get("entry")
+    if isinstance(entry_id, str) and entry_id:
+        found = next(
+            (t for t in TYPE_DIRS if (kb_dir / TYPE_DIRS[t] / f"{entry_id}.md").is_file()),
+            None,
+        )
+        if found:
+            return (
+                "# FOCUS\n\n"
+                f"The person has the {found} `{entry_id}` open in the editor. Unless they "
+                "say otherwise, assume they are talking about it, and prefer proposing "
+                "an update to it over creating something new."
+            )
+    new_type = focus.get("new")
+    if isinstance(new_type, str) and new_type in TYPE_DIRS:
+        parent = focus.get("parent")
+        under = (
+            f", under the existing entry `{parent}`" if isinstance(parent, str) and parent else ""
+        )
+        return (
+            "# FOCUS\n\n"
+            f"The person is adding a new {new_type}{under}. Propose a `create` for it "
+            "and ask for whatever you need to make it accurate."
+        )
+    return ""
+
+
 def conversation_block(turns: list[dict[str, Any]]) -> str:
     """Recent history, with what happened to each proposal.
 
@@ -274,13 +324,17 @@ async def curate(
     config: Config,
     history: list[dict[str, Any]],
     message: str,
+    focus: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One curator turn: the person's message in, an assistant turn out."""
     prefix = f"{render_corpus(corpus)}\n\n{taxonomy_block(corpus)}"
     # Refuse before spending anything if the corpus cannot fit (spec-06 §4).
     backend.capabilities.assert_corpus_fits(backend.name, estimate_tokens(prefix))
 
-    prompt = f"{conversation_block(history)}\n\nPERSON: {message}"
+    where = focus_block(kb_dir, focus)
+    prompt = "\n\n".join(
+        part for part in (where, conversation_block(history), f"PERSON: {message}") if part
+    )
     result = await backend.run_agent(
         build_spec("curator", config.models), prompt, cache_prefix=prefix
     )

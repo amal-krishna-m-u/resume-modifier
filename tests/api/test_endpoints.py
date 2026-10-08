@@ -467,3 +467,101 @@ def test_a_corrupt_run_does_not_hide_the_others(client: TestClient, project: Pat
 
 def test_usage_with_no_runs_is_empty_not_an_error(client: TestClient) -> None:
     assert client.get("/api/kb/usage").json() == {"runs": 0, "facts": {}}
+
+
+# -- run titles --------------------------------------------------------------
+
+
+def test_runs_are_listed_by_a_human_title(client: TestClient, project: Path) -> None:
+    from resume_tailor.pipeline.artifacts import Run
+
+    run = Run.create(project / "runs", "2026-10-07-visa-untitled")
+    run.write("requirements", {"role_title": "SW Engineer (GenAI)", "requirements": []})
+    run.write("meta", {"company": "Visa"})
+
+    row = client.get("/api/runs").json()["runs"][0]
+    assert row["title"] == "SW Engineer (GenAI)"
+    assert row["company"] == "Visa"
+
+
+def test_a_run_can_be_renamed_without_moving_it(client: TestClient, project: Path) -> None:
+    """The folder name is permanent — applications and snapshots refer to it —
+    so renaming sets a display title and touches nothing else."""
+    from resume_tailor.pipeline.artifacts import Run
+
+    Run.create(project / "runs", "2026-10-07-x")
+    body = client.patch("/api/runs/2026-10-07-x", json={"title": "Visa — GenAI role"}).json()
+    assert body["title"] == "Visa — GenAI role"
+    assert (project / "runs" / "2026-10-07-x").is_dir()
+
+    cleared = client.patch("/api/runs/2026-10-07-x", json={"title": ""}).json()
+    assert cleared["title"] != "Visa — GenAI role"  # falls back to the computed one
+
+
+def test_a_new_run_is_named_from_its_posting(client: TestClient) -> None:
+    run_id = client.post(
+        "/api/runs", json={"text": "Senior Backend Engineer\nWe hire.", "company": "Acme"}
+    ).json()["run_id"]
+    assert "untitled" not in run_id
+    assert "acme" in run_id and "senior-backend-engineer" in run_id
+
+
+def test_an_absurd_title_is_refused(client: TestClient, project: Path) -> None:
+    from resume_tailor.pipeline.artifacts import Run
+
+    Run.create(project / "runs", "r")
+    assert client.patch("/api/runs/r", json={"title": "x" * 500}).status_code == 400
+
+
+# -- nothing is downloadable mid-revision ------------------------------------
+
+
+def _drafted_run(project: Path, name: str):
+    from resume_tailor.pipeline.artifacts import Run
+
+    run = Run.create(project / "runs", name)
+    run.write(
+        "draft",
+        {
+            "sections": [
+                {
+                    "kind": "experience",
+                    "role_id": "acme-engineer",
+                    "bullets": [{"text": "Built it.", "sources": ["acme-pipeline"]}],
+                }
+            ]
+        },
+    )
+    return run
+
+
+def test_export_is_refused_while_a_revision_is_running(client: TestClient, project: Path) -> None:
+    """Between the Writer finishing and the Validator finishing, draft.json is
+    the NEW draft and validation.json the OLD verdict. Exporting then would
+    apply old cuts to new text and could hand over claims nobody has checked —
+    the one thing the validator exists to prevent."""
+    _drafted_run(project, "mid-revision")
+    client.app.state.context.active_runs.add("mid-revision")
+
+    for path in ("export.tex", "export.pdf"):
+        response = client.get(f"/api/runs/mid-revision/{path}")
+        assert response.status_code == 409, path
+        assert response.json()["code"] == "run_busy"
+        assert response.json()["remedy"]
+
+
+def test_export_works_again_once_the_revision_ends(client: TestClient, project: Path) -> None:
+    _drafted_run(project, "after-revision")
+    client.app.state.context.active_runs.add("after-revision")
+    assert client.get("/api/runs/after-revision/export.tex").status_code == 409
+    client.app.state.context.active_runs.discard("after-revision")
+    assert client.get("/api/runs/after-revision/export.tex").status_code == 200
+
+
+def test_a_second_revision_is_refused_while_one_is_running(
+    client: TestClient, project: Path
+) -> None:
+    _drafted_run(project, "double")
+    client.app.state.context.active_runs.add("double")
+    response = client.post("/api/runs/double/chat", json={"message": "again"})
+    assert response.status_code == 409 and response.json()["code"] == "run_busy"

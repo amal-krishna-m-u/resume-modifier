@@ -555,7 +555,7 @@ def backend(monkeypatch):
 
 
 def test_the_conversation_starts_empty(client: TestClient) -> None:
-    assert client.get("/api/kb/chat").json() == {"turns": [], "running": False}
+    assert client.get("/api/kb/chat").json() == {"turns": [], "running": False, "scope": "kb"}
 
 
 def test_sending_a_message_records_it_and_the_answer(client: TestClient, backend) -> None:
@@ -640,7 +640,7 @@ def test_a_failing_backend_shows_up_as_an_error_not_endless_thinking(
 
 
 def test_a_second_message_while_busy_is_refused(client: TestClient) -> None:
-    client.app.state.context.chat_running = True
+    client.app.state.context.chat_running.add("kb")
     response = client.post("/api/kb/chat", json={"message": "again"})
     assert response.status_code == 400
     assert response.json()["remedy"]
@@ -662,3 +662,108 @@ def test_the_chat_routes_do_not_shadow_entry_routes(client: TestClient) -> None:
     """`/kb/chat` shares a prefix with `/kb/{type}/{id}`; both must still work."""
     assert client.get("/api/kb/role/acme-engineer").status_code == 200
     assert client.get("/api/kb/chat").status_code == 200
+
+
+# ============================================================ scoped + focused
+
+from resume_tailor.pipeline.curator import focus_block  # noqa: E402
+
+
+def test_each_entry_has_its_own_conversation(client: TestClient, backend) -> None:
+    """Showing the whole history inside every entry's editor would be noise, and
+    "add that it served 2,000 users" only means something beside its entry."""
+    backend(scripted({"reply": "ok", "proposals": []}))
+    client.post("/api/kb/chat", json={"message": "about the role", "scope": "acme-engineer"})
+    wait_idle_scope(client, "acme-engineer")
+
+    assert len(client.get("/api/kb/chat?scope=acme-engineer").json()["turns"]) == 2
+    assert client.get("/api/kb/chat").json()["turns"] == []  # the global one is untouched
+
+
+def wait_idle_scope(client: TestClient, scope: str, timeout: float = 6.0) -> dict:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        body = client.get(f"/api/kb/chat?scope={scope}").json()
+        if not body["running"]:
+            return body
+        time.sleep(0.05)
+    raise AssertionError("the assistant never finished")
+
+
+def test_one_entry_being_busy_does_not_block_another(client: TestClient) -> None:
+    client.app.state.context.chat_running.add("acme-engineer")
+    assert (
+        client.post("/api/kb/chat", json={"message": "x", "scope": "acme-engineer"}).status_code
+        == 400
+    )
+    # a different scope is free
+    client.app.state.context.chat_running.discard("acme-engineer")
+    assert (
+        client.post("/api/kb/chat", json={"message": "x", "scope": "other-entry"}).status_code
+        == 200
+    )
+
+
+@pytest.mark.parametrize("hostile", ["../../etc/passwd", "a/b", "A B", "..", "x.json", ""])
+def test_a_hostile_scope_cannot_escape_the_chats_directory(
+    client: TestClient, project: Path, hostile: str
+) -> None:
+    """The scope becomes part of a filename and arrives in a URL."""
+    response = client.get("/api/kb/chat", params={"scope": hostile})
+    assert response.status_code in (400, 422) or hostile == ""
+    assert not any(project.glob("**/passwd*"))
+    assert [p.name for p in (project / "chats").glob("*")] in ([], ["kb-chat.json"])
+
+
+def test_accepting_finds_the_proposal_in_its_own_scope(
+    client: TestClient, backend, project: Path
+) -> None:
+    backend(scripted({"reply": "x", "proposals": [FACT]}))
+    client.post("/api/kb/chat", json={"message": "x", "scope": "acme-engineer"})
+    proposal = wait_idle_scope(client, "acme-engineer")["turns"][1]["proposals"][0]
+
+    wrong = client.post(f"/api/kb/chat/proposals/{proposal['id']}/accept")  # global scope
+    assert wrong.status_code == 404
+    right = client.post(f"/api/kb/chat/proposals/{proposal['id']}/accept?scope=acme-engineer")
+    assert right.status_code == 200
+
+
+def test_the_open_entry_is_given_to_the_assistant(project: Path) -> None:
+    """Without it "add that this handled 2,000 users" is unanswerable, and the
+    assistant guesses which entry or interrogates the person about it."""
+    block = focus_block(kb_of(project), {"entry": "acme-engineer"})
+    assert "acme-engineer" in block and "update" in block
+
+
+def test_adding_a_new_entry_says_so(project: Path) -> None:
+    block = focus_block(kb_of(project), {"new": "fact", "parent": "acme-engineer"})
+    assert "new fact" in block and "acme-engineer" in block and "create" in block
+
+
+def test_a_focus_on_something_that_does_not_exist_is_ignored(project: Path) -> None:
+    assert focus_block(kb_of(project), {"entry": "ghost"}) == ""
+    assert focus_block(kb_of(project), None) == ""
+    assert focus_block(kb_of(project), {"new": "sandwich"}) == ""
+
+
+async def test_the_focus_reaches_the_prompt(project: Path) -> None:
+    runner = scripted({"reply": "x", "proposals": []})
+    await curate(
+        runner,
+        load_corpus(kb_of(project)),
+        kb_of(project),
+        Config(),
+        [],
+        "add detail",
+        {"entry": "acme-engineer"},
+    )
+    prompt = runner.calls["curator"][0]
+    assert "# FOCUS" in prompt
+    assert prompt.index("# FOCUS") < prompt.index("add detail")
+
+
+def test_archiving_names_the_scope(project: Path) -> None:
+    store = ChatStore(project / "chats", "acme-engineer")
+    store.append({"role": "user", "text": "x"})
+    archived = store.archive()
+    assert archived and archived.name.startswith("kb-chat--acme-engineer-")
