@@ -27,6 +27,9 @@ runs/
 applications/
 .cache/
 
+# The knowledge-base chat: your career, in your own words.
+chats/
+
 # Saved tag weightings per role type. They encode what the owner is targeting,
 # which is personal even though it holds no contact details.
 profiles/

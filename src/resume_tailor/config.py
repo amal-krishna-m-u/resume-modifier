@@ -39,6 +39,7 @@ class ModelConfig:
     recall: str | None = None
     writer: str | None = None
     validator: str | None = None
+    curator: str | None = None
 
     def for_agent(self, name: str) -> str | None:
         return getattr(self, name, None) or self.default

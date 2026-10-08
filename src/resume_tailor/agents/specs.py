@@ -131,6 +131,7 @@ DRAFT_SCHEMA = {
     "properties": {
         "summary": {"type": "string"},
         "summary_sources": {"type": "array", "items": {"type": "string"}},
+        "reply": {"type": "string"},
         "sections": {
             "type": "array",
             "items": {
@@ -194,18 +195,50 @@ VALIDATION_SCHEMA = {
     },
 }
 
+CURATOR_SCHEMA = {
+    "type": "object",
+    "required": ["reply", "proposals"],
+    "properties": {
+        "reply": {"type": "string"},
+        "questions": {"type": "array", "items": {"type": "string"}},
+        "proposals": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["op", "type", "id"],
+                "properties": {
+                    "op": {"enum": ["create", "update"]},
+                    "type": {"type": "string"},
+                    "id": {"type": "string"},
+                    "reason": {"type": "string"},
+                    "fields": {"type": "object"},
+                    "add_tags": {"type": "array", "items": {"type": "string"}},
+                    "add_metrics": {"type": "array"},
+                    "body": {"type": "string"},
+                    "body_append": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
 SCHEMAS = {
     "analyst": REQUIREMENTS_SCHEMA,
     "selector": SELECTION_SCHEMA,
     "recall": RECALL_SCHEMA,
     "writer": DRAFT_SCHEMA,
     "validator": VALIDATION_SCHEMA,
+    # Not part of a tailoring run, so not in AGENT_NAMES: it maintains the
+    # knowledge base from a conversation (AC-R13.2) and proposes, never writes.
+    "curator": CURATOR_SCHEMA,
 }
 
 
 def build_spec(name: str, models: ModelConfig | None = None) -> AgentSpec:
     if name not in SCHEMAS:
-        raise ValueError(f"unknown agent {name!r}; expected one of: {', '.join(AGENT_NAMES)}")
+        raise ValueError(
+            f"unknown agent {name!r}; expected one of: {', '.join([*AGENT_NAMES, 'curator'])}"
+        )
     models = models or ModelConfig()
     return AgentSpec(
         name=name,

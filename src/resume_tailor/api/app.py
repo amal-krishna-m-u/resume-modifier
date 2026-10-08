@@ -43,6 +43,7 @@ from ..kb.write import (
     write_yaml_file,
 )
 from ..kb.yamlio import load_yaml
+from ..pipeline import curator
 from ..pipeline.artifacts import Run, list_runs, run_slug
 from ..pipeline.orchestrator import Pipeline
 from ..pipeline.report import render_gap_report
@@ -73,6 +74,11 @@ class Context:
         #: and an abandoned one look identical, so liveness has to be held
         #: in the process that owns the task.
         self.active_runs: set[str] = set()
+        #: The knowledge-base chat lives on disk (so it survives a restart and a
+        #: page change) but "the assistant is thinking" can only be held by the
+        #: process that owns the task.
+        self.chat = curator.ChatStore(self.root / "chats")
+        self.chat_running = False
 
     def corpus(self):
         return load_corpus(self.kb_dir)
@@ -191,6 +197,48 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
                     row["strong"] += 1
         facts.pop("", None)
         return {"runs": counted, "facts": facts}
+
+    # -- knowledge-base chat (AC-R13.2, spec-04 §6.8) ---------------------------
+
+    @router.get("/kb/chat")
+    async def kb_chat_history() -> dict[str, Any]:
+        return {"turns": context.chat.load(), "running": context.chat_running}
+
+    @router.post("/kb/chat")
+    async def kb_chat_send(payload: dict = Body(...)) -> dict[str, Any]:
+        message = (payload.get("message") or "").strip()
+        if not message:
+            raise WriteError(
+                "no message", remedy="Tell the assistant what you did or what to change."
+            )
+        if context.chat_running:
+            raise WriteError(
+                "the assistant is still working on your last message",
+                remedy="Wait for it to finish — it will appear in the conversation.",
+            )
+
+        # The person's turn is written immediately, so it is on screen while the
+        # assistant works and survives navigating away.
+        context.chat.append({"role": "user", "at": curator.now(), "text": message})
+        context.chat_running = True
+        asyncio.create_task(_curate(context, message))
+        return {"running": True}
+
+    @router.post("/kb/chat/proposals/{proposal_id}/accept")
+    async def kb_chat_accept(proposal_id: str) -> dict[str, Any]:
+        proposal = curator.accept(
+            context.kb_dir, context.chat, proposal_id, cache_dir=context.cache_dir
+        )
+        return {"proposal": proposal}
+
+    @router.post("/kb/chat/proposals/{proposal_id}/reject")
+    async def kb_chat_reject(proposal_id: str) -> dict[str, Any]:
+        return {"proposal": curator.reject(context.chat, proposal_id)}
+
+    @router.delete("/kb/chat")
+    async def kb_chat_reset() -> dict[str, Any]:
+        archived = context.chat.archive()
+        return {"archived": archived.name if archived else None}
 
     @router.get("/kb/validate")
     async def kb_validate() -> dict[str, Any]:
@@ -361,6 +409,13 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         message = (payload.get("message") or "").strip()
         if not message:
             raise WriteError("no message", remedy="Say what you want changed.")
+
+        # Recorded here, synchronously, rather than inside the task: the page
+        # refetches the moment this returns, and the person's own message must
+        # already be there.
+        history = run.read("chat") if run.has("chat") else []
+        history.append({"role": "user", "text": message})
+        run.write("chat", history)
 
         asyncio.create_task(_revise(context, run, message))
         return {"run_id": run.id, "events": f"/api/runs/{run.id}/events"}
@@ -554,6 +609,41 @@ def _written(result) -> dict[str, Any]:
     }
 
 
+async def _curate(context: Context, message: str) -> None:
+    """One curator turn, written to the conversation file when it finishes.
+
+    Failures become a turn too — an `error` the page can show — rather than
+    vanishing into a log: the person is watching a box that says "thinking".
+    """
+    try:
+        history = context.chat.load()[:-1]  # everything before this message
+        turn = await curator.curate(
+            build_backend(context.config),
+            context.corpus(),
+            context.kb_dir,
+            context.config,
+            history,
+            message,
+        )
+        turns = context.chat.load()
+        curator.supersede(turns, turn)
+        turns.append(turn)
+        context.chat.save(turns)
+    except Exception as exc:
+        context.chat.append(
+            {
+                "role": "assistant",
+                "at": curator.now(),
+                "text": "",
+                "error": str(exc),
+                "questions": [],
+                "proposals": [],
+            }
+        )
+    finally:
+        context.chat_running = False
+
+
 def _download_name(run_id: str, path: Path) -> str:
     """A filename that means something in a Downloads folder.
 
@@ -641,7 +731,7 @@ async def _revise(context: Context, run: Run, message: str) -> None:
         pipeline = Pipeline(
             build_backend(context.config), context.corpus(), context.config, on_progress=progress
         )
-        result = await pipeline.revise(run, message)
+        result = await pipeline.revise(run, message, already_recorded=True)
         (run.directory / "gap-report.md").write_text(
             render_gap_report(
                 result.requirements, result.selection, result.gaps, result.validation

@@ -77,6 +77,8 @@ Reply with JSON only. No prose, no code fences. The first character must be `{`.
 }
 ```
 
+On a **revision** only, also include `"reply"`: one to three plain sentences telling the person what you changed, and — importantly — anything they asked for that you did **not** do and why ("I couldn't add that you led a team: none of your recorded facts say so"). They will read this next to a computed diff of what actually changed, so be accurate rather than flattering. Omit it on a first draft.
+
 `kind` is `experience`, `internship`, `project` or `education`.
 `metrics_used` lists the figures you took from `metrics` fields, so they can be
 checked against the source.

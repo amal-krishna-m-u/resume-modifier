@@ -340,3 +340,79 @@ async def test_the_previous_draft_is_kept_for_comparison(kb: Path, tmp_path: Pat
     )
     assert run.has("draft-previous")
     assert run.read("draft-previous")["summary"] == "Backend engineer."
+
+
+# -- what the person sees of a revision ------------------------------------
+
+
+async def test_the_persons_message_is_on_disk_before_the_writer_runs(
+    kb: Path, tmp_path: Path
+) -> None:
+    """A revision takes a minute or two. Until now the person's own message was
+    missing from the conversation for all of it."""
+    run = Run.create(tmp_path / "runs", "recorded-first")
+    corpus = load_corpus(kb)
+    await Pipeline(FakeRunner(REPLIES), corpus, Config()).run(run, POSTING)
+
+    seen: list[list] = []
+
+    def writer(_prompt: str):
+        seen.append(run.read("chat"))  # what is on disk at the moment it is called
+        return REVISED
+
+    await Pipeline(FakeRunner({**REPLIES, "writer": writer}), corpus, Config()).revise(
+        run, "Make it shorter."
+    )
+    assert seen[0][-1] == {"role": "user", "text": "Make it shorter."}
+
+
+async def test_the_assistants_answer_carries_what_actually_changed(
+    kb: Path, tmp_path: Path
+) -> None:
+    run = Run.create(tmp_path / "runs", "diffed")
+    corpus = load_corpus(kb)
+    await Pipeline(FakeRunner(REPLIES), corpus, Config()).run(run, POSTING)
+    await Pipeline(FakeRunner({**REPLIES, "writer": REVISED}), corpus, Config()).revise(
+        run, "Shorter."
+    )
+    turn = run.read("chat")[-1]
+    assert turn["role"] == "assistant"
+    assert any(c["kind"] == "summary" for c in turn["changes"])
+    assert turn["text"], "never an empty answer"
+
+
+async def test_the_writers_own_account_is_shown_when_it_gives_one(kb: Path, tmp_path: Path) -> None:
+    run = Run.create(tmp_path / "runs", "account")
+    corpus = load_corpus(kb)
+    await Pipeline(FakeRunner(REPLIES), corpus, Config()).run(run, POSTING)
+    reply = {**REVISED, "reply": "I couldn't add that you led a team: no fact says so."}
+    await Pipeline(FakeRunner({**REPLIES, "writer": reply}), corpus, Config()).revise(run, "x")
+    assert run.read("chat")[-1]["text"].startswith("I couldn't add that you led a team")
+
+
+async def test_without_an_account_the_computed_diff_speaks(kb: Path, tmp_path: Path) -> None:
+    run = Run.create(tmp_path / "runs", "fallback")
+    corpus = load_corpus(kb)
+    await Pipeline(FakeRunner(REPLIES), corpus, Config()).run(run, POSTING)
+    await Pipeline(FakeRunner({**REPLIES, "writer": REVISED}), corpus, Config()).revise(run, "x")
+    assert run.read("chat")[-1]["text"].startswith("Done:")
+
+
+async def test_validator_findings_reach_the_conversation(kb: Path, tmp_path: Path) -> None:
+    """A cut claim should be explained where the person asked for it, not only
+    on a different tab."""
+    run = Run.create(tmp_path / "runs", "findings")
+    corpus = load_corpus(kb)
+    await Pipeline(FakeRunner(REPLIES), corpus, Config()).run(run, POSTING)
+    cut = {
+        "verdict": "changes_made",
+        "clean": False,
+        "warnings": [],
+        "cuts": [{"bullet": "Led a team.", "reason": "no source says so"}],
+    }
+    await Pipeline(
+        FakeRunner({**REPLIES, "writer": REVISED, "validator": cut}), corpus, Config()
+    ).revise(run, "Say I led a team.")
+    turn = run.read("chat")[-1]
+    assert turn["clean"] is False
+    assert turn["cuts"][0]["reason"] == "no source says so"
