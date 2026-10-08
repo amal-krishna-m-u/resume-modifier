@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .loader import Corpus
 
-INDEX_VERSION = 3
+INDEX_VERSION = 4
 
 
 @dataclass(frozen=True)
@@ -41,6 +41,9 @@ class IndexRow:
     #: "matched, but not strongly" row in a gap report is a thin body, and
     #: finding it should not require opening each entry.
     body_words: int
+    #: Organisation, so the UI can label a role as people read it
+    #: ("Associate Software Engineer 2 · EY GDS") instead of by id.
+    org: str | None
     path: str
     sha256: str
     mtime: float
@@ -64,6 +67,7 @@ def build_index(corpus: Corpus) -> dict:
                 metrics=len(entry.meta.metrics),
                 estimated_tokens=entry.estimated_tokens(),
                 body_words=len(entry.body.split("<!--")[0].split()),
+                org=getattr(entry.meta, "org", None),
                 path=str(entry.path.relative_to(corpus.root)),
                 sha256=entry.sha256,
                 mtime=entry.path.stat().st_mtime,

@@ -11,10 +11,68 @@
 
 body {
   @apply bg-stone-50 text-stone-900 antialiased;
+  font-feature-settings: "cv11", "ss01";
 }
 
 @media (prefers-color-scheme: dark) {
   body {
     @apply bg-stone-950 text-stone-100;
+  }
+}
+
+/* Shared controls. Before this every button was a one-off class string, which
+   is how the UI ended up with five slightly different "primary" buttons.
+
+   `@utility`, not `@layer components`: Tailwind v4 only lets `@apply` use real
+   utilities, so a component class could not be composed into another. */
+@utility btn {
+  @apply inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium
+    transition-colors select-none cursor-pointer
+    focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500
+    disabled:opacity-40 disabled:cursor-not-allowed;
+}
+@utility btn-primary {
+  @apply btn bg-stone-900 text-stone-50 hover:bg-stone-700
+    dark:bg-stone-100 dark:text-stone-900 dark:hover:bg-stone-300;
+}
+@utility btn-secondary {
+  @apply btn border border-stone-300 hover:bg-stone-100
+    dark:border-stone-700 dark:hover:bg-stone-900;
+}
+@utility btn-ghost {
+  @apply btn text-stone-600 hover:bg-stone-100 hover:text-stone-900
+    dark:text-stone-400 dark:hover:bg-stone-900 dark:hover:text-stone-100;
+}
+@utility btn-danger {
+  @apply btn bg-red-700 text-white hover:bg-red-600;
+}
+@utility field {
+  @apply w-full rounded-md border border-stone-300 bg-white px-3 py-2 text-sm
+    placeholder:text-stone-400 dark:border-stone-700 dark:bg-stone-900 dark:placeholder:text-stone-600
+    focus:outline-none focus:ring-2 focus:ring-sky-500/60 focus:border-sky-500;
+}
+@utility card {
+  @apply rounded-lg border border-stone-200 dark:border-stone-800;
+}
+@utility kbd {
+  @apply rounded border border-stone-300 dark:border-stone-700 bg-stone-100 dark:bg-stone-900
+    px-1 py-0.5 font-mono text-[10px] text-stone-500;
+}
+
+/* Native selects look like OS widgets next to everything else. Strip the
+   platform chrome and draw one chevron so they match the rest. */
+@layer components {
+  select.field,
+  select.select {
+    appearance: none;
+    padding-right: 2rem;
+    background-repeat: no-repeat;
+    background-position: right 0.6rem center;
+    cursor: pointer;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2378716c' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  }
+  select.select {
+    @apply rounded-md border border-stone-300 bg-transparent px-2.5 py-1.5 text-sm
+      dark:border-stone-700 focus:outline-none focus:ring-2 focus:ring-sky-500/60;
   }
 }

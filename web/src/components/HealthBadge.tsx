@@ -29,7 +29,7 @@ export function HealthBadge() {
       title={problems.join("\n") || `${backend.name} · ${corpus.entries} entries`}
     >
       <span className={`size-2 rounded-full ${ok ? "bg-emerald-500" : "bg-amber-500"}`} />
-      <span className="text-stone-500 dark:text-stone-400 tabular-nums">
+      <span className="hidden sm:inline text-stone-500 dark:text-stone-400 tabular-nums">
         {backend.name} · {corpus.entries} entries
       </span>
     </div>

@@ -81,4 +81,4 @@ def test_a_stale_index_version_is_distinguishable(kb: Path) -> None:
     from resume_tailor.kb.index import INDEX_VERSION
 
     assert build_index(load_corpus(kb))["version"] == INDEX_VERSION
-    assert INDEX_VERSION >= 3, "body_words arrived in v3; older caches lack it"
+    assert INDEX_VERSION >= 4, "org arrived in v4; older caches lack it"

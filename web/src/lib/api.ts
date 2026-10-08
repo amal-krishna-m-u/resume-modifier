@@ -53,6 +53,11 @@ export const api = {
     request<{ ok: boolean; errors: Issue[]; warnings: Issue[] }>("/kb/validate"),
   entry: (type: string, id: string) => request<Entry>(`/kb/${type}/${id}`),
 
+  kbUsage: () =>
+    request<{ runs: number; facts: Record<string, { runs: number; strong: number }> }>(
+      "/kb/usage",
+    ),
+
   taxonomy: () =>
     request<{
       terms: Record<string, { label?: string; facet?: string; aliases?: string[] }>;

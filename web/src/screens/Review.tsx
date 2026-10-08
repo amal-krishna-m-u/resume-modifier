@@ -1,5 +1,9 @@
-import { useState } from "react";
-import type { Draft, Gap, Merged, Requirement, SelectedFact, Validation } from "../lib/types";
+import { useState, type ReactNode } from "react";
+import { Inline } from "../lib/inline";
+import { labelFor } from "../lib/roles";
+import type {
+  Draft, Gap, IndexRow, Merged, Requirement, SelectedFact, Validation,
+} from "../lib/types";
 
 /** Screen 6.3 — the primary screen (R4).
  *
@@ -17,14 +21,27 @@ export function Review({
   draft,
   validation,
   gaps,
+  runId,
+  contactSets,
+  entries,
+  version,
+  chat,
 }: {
   requirements: { role_title?: string; requirements: Requirement[] };
   merged: Merged;
   draft: Draft;
   validation: Validation;
   gaps: Gap[];
+  runId: string;
+  contactSets: string[];
+  entries: IndexRow[];
+  /** Changes whenever the draft does, so the preview reloads after a revision. */
+  version: number;
+  /** The revise box. Sits beside the preview, so a change and its effect are
+   * on screen together instead of a scroll apart. */
+  chat?: ReactNode;
 }) {
-  const [tab, setTab] = useState<"matches" | "gaps" | "draft">("draft");
+  const [tab, setTab] = useState<"resume" | "matches" | "gaps" | "draft">("resume");
 
   const absent = gaps.filter((gap) => gap.status === "absent");
   const weak = gaps.filter((gap) => gap.status === "weak");
@@ -32,9 +49,18 @@ export function Review({
 
   return (
     <div>
-      <div className="flex gap-1 border-b border-stone-200 dark:border-stone-800">
+      <ExportNotice
+        validation={validation}
+        gaps={gaps}
+        onReview={() => setTab(absent.length + weak.length > 0 ? "gaps" : "draft")}
+      />
+
+      <div className="flex gap-1 overflow-x-auto border-b border-stone-200 dark:border-stone-800">
+        <Tab active={tab === "resume"} onClick={() => setTab("resume")}>
+          Resume
+        </Tab>
         <Tab active={tab === "draft"} onClick={() => setTab("draft")}>
-          Draft
+          Sources
           {!validation.clean && (
             <Pill tone="amber">{validation.cuts.length + validation.warnings.length}</Pill>
           )}
@@ -49,13 +75,24 @@ export function Review({
       </div>
 
       <div className="py-6">
-        {tab === "draft" && <DraftPanel draft={draft} validation={validation} />}
+        {tab === "resume" && (
+          <Preview
+            runId={runId}
+            contactSets={contactSets}
+            version={version}
+            chat={chat}
+          />
+        )}
+        {tab === "draft" && (
+          <DraftPanel draft={draft} validation={validation} entries={entries} />
+        )}
         {tab === "matches" && (
           <MatchesPanel requirements={requirements.requirements} merged={merged} />
         )}
         {tab === "gaps" && (
           <GapsPanel absent={absent} weak={weak} covered={covered} merged={merged} />
         )}
+        {tab !== "resume" && chat && <div className="mt-8">{chat}</div>}
       </div>
     </div>
   );
@@ -63,19 +100,27 @@ export function Review({
 
 /* ------------------------------------------------------------------ draft */
 
-function DraftPanel({ draft, validation }: { draft: Draft; validation: Validation }) {
+function DraftPanel({
+  draft,
+  validation,
+  entries,
+}: {
+  draft: Draft;
+  validation: Validation;
+  entries: IndexRow[];
+}) {
   const cuts = new Map(validation.cuts.map((cut) => [cut.bullet, cut]));
   const warnings = new Map(validation.warnings.map((warning) => [warning.bullet, warning]));
 
   return (
-    <div className="grid lg:grid-cols-[1fr_20rem] gap-8 items-start">
+    <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[1fr_20rem] gap-8 items-start">
       <article className="space-y-6">
         {draft.summary && (
           <section>
             <h3 className="text-xs font-semibold uppercase tracking-wide text-stone-500">
               Summary
             </h3>
-            <p className="mt-2 leading-relaxed">{draft.summary}</p>
+            <p className="mt-2 leading-relaxed"><Inline text={draft.summary} /></p>
             <Sources ids={draft.summary_sources ?? []} />
           </section>
         )}
@@ -95,10 +140,16 @@ function DraftPanel({ draft, validation }: { draft: Draft; validation: Validatio
           </section>
         )}
 
-        {draft.sections.map((section, index) => (
+        {draft.sections.map((section, index) => {
+          const label = labelFor(section.role_id, entries);
+          return (
           <section key={`${section.role_id ?? section.kind}-${index}`}>
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-stone-500">
-              {section.role_id ?? section.kind}
+            <h3 className="flex flex-wrap items-baseline gap-x-2 text-sm">
+              <span className="font-semibold">{label?.title ?? section.role_id ?? section.kind}</span>
+              {label?.org && <span className="text-stone-500">{label.org}</span>}
+              {label?.dates && (
+                <span className="text-xs text-stone-400 tabular-nums">{label.dates}</span>
+              )}
             </h3>
             <ul className="mt-2 space-y-3">
               {section.bullets.map((bullet) => {
@@ -116,8 +167,12 @@ function DraftPanel({ draft, validation }: { draft: Draft; validation: Validatio
                     }`}
                   >
                     <span className={cut ? "line-through" : ""}>
-                      {bullet.lead && <strong>{bullet.lead}: </strong>}
-                      {bullet.text}
+                      {bullet.lead && (
+                        <strong className="font-semibold">
+                          <Inline text={bullet.lead} />:{" "}
+                        </strong>
+                      )}
+                      <Inline text={bullet.text} />
                     </span>
                     <Sources ids={bullet.sources} />
                     {cut && (
@@ -138,7 +193,8 @@ function DraftPanel({ draft, validation }: { draft: Draft; validation: Validatio
               })}
             </ul>
           </section>
-        ))}
+          );
+        })}
       </article>
 
       <aside className="rounded border border-stone-200 dark:border-stone-800 p-4 text-sm sticky top-20">
@@ -469,5 +525,142 @@ function Note({
     <p className={`mt-1 text-xs leading-relaxed ${tones[tone]}`}>
       <span className="font-medium uppercase tracking-wide">{label}</span> — {children}
     </p>
+  );
+}
+
+
+/* ------------------------------------------------------------ export notice */
+
+/** AC-R4.3's intent, made visible.
+ *
+ * The criterion says export is disabled until the review has been opened. An
+ * earlier version enforced that by watching for hover, which disabled the
+ * download buttons for a reason nobody could see — the reaction was to wonder
+ * whether export worked at all. The intent is that nothing leaves the machine
+ * before you have seen what was cut and what is missing, so that is stated
+ * plainly, once, with a way to go and look. */
+function ExportNotice({
+  validation,
+  gaps,
+  onReview,
+}: {
+  validation: Validation;
+  gaps: Gap[];
+  onReview: () => void;
+}) {
+  const absent = gaps.filter((gap) => gap.status === "absent").length;
+  const weak = gaps.filter((gap) => gap.status === "weak").length;
+  const cuts = validation.cuts.length;
+  const clean = validation.clean && gaps.length === 0;
+
+  const parts = [
+    cuts > 0 && `the validator cut ${cuts} claim${cuts === 1 ? "" : "s"}`,
+    absent > 0 &&
+      `${absent} requirement${absent === 1 ? " has" : "s have"} nothing behind ${absent === 1 ? "it" : "them"}`,
+    weak > 0 && `${weak} matched only weakly`,
+  ].filter(Boolean);
+
+  return (
+    <div
+      className={`mb-5 flex items-center gap-2.5 rounded-lg border px-4 py-2.5 text-sm ${
+        clean
+          ? "border-emerald-300 dark:border-emerald-900 bg-emerald-50/60 dark:bg-emerald-950/30"
+          : "border-amber-300 dark:border-amber-900 bg-amber-50/60 dark:bg-amber-950/30"
+      }`}
+    >
+      <span className={clean ? "text-emerald-500" : "text-amber-500"}>●</span>
+      <div className="flex-1">
+        {clean ? (
+          "Every claim traces to a recorded fact, and every requirement is matched."
+        ) : (
+          <>
+            <strong className="font-semibold">Before you send this:</strong> {parts.join(", ")}.
+          </>
+        )}
+      </div>
+      {!clean && (
+        <button onClick={onReview} className="btn-ghost text-xs shrink-0">
+          See what →
+        </button>
+      )}
+    </div>
+  );
+}
+
+/* ---------------------------------------------------------------- preview */
+
+/** The compiled resume, as it would be sent.
+ *
+ * The sources tab shows provenance; this shows the deliverable. Reviewing a
+ * resume as text and discovering how it laid out only after export is the
+ * wrong order — a bullet that wraps to a third line or pushes onto page two is
+ * only visible here. */
+function Preview({
+  runId,
+  contactSets,
+  version,
+  chat,
+}: {
+  runId: string;
+  contactSets: string[];
+  version: number;
+  chat?: ReactNode;
+}) {
+  const [set, setSet] = useState(contactSets[0] ?? "");
+  const active = contactSets.includes(set) ? set : (contactSets[0] ?? "");
+
+  if (contactSets.length === 0) {
+    return (
+      <p className="text-sm text-stone-500">
+        No contact details are configured, so there is nothing to render. Add them to{" "}
+        <code className="font-mono">kb/identity.yaml</code>.
+      </p>
+    );
+  }
+
+  const src = `/api/runs/${runId}/export.pdf?inline=true&contact_set=${active}&v=${version}#toolbar=0&navpanes=0&view=FitH`;
+
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(0,48rem)_minmax(0,1fr)] gap-8 items-start">
+      {/* Sized to the viewport rather than to an A4 aspect ratio. A 1,175px
+          frame pushed everything else — including the revise box — far below
+          the fold; the viewer scrolls within it instead. */}
+      <div className="card overflow-hidden bg-white">
+        <iframe
+          key={src}
+          title="Compiled resume"
+          src={src}
+          className="block w-full"
+          style={{ height: "calc(100vh - 11rem)", minHeight: "34rem" }}
+        />
+      </div>
+
+      <aside className="space-y-5 lg:sticky lg:top-20">
+        {contactSets.length > 1 && (
+          <div>
+            <div className="text-xs font-medium text-stone-500 mb-1.5">Contact details</div>
+            <div className="flex rounded-md border border-stone-300 dark:border-stone-700 overflow-hidden text-sm">
+              {contactSets.map((name) => (
+                <button
+                  key={name}
+                  onClick={() => setSet(name)}
+                  className={`flex-1 px-3 py-1.5 capitalize ${
+                    name === active
+                      ? "bg-stone-900 text-stone-50 dark:bg-stone-100 dark:text-stone-900 font-medium"
+                      : "hover:bg-stone-100 dark:hover:bg-stone-900"
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-[11px] text-stone-400 leading-snug">
+              Same tailored content — only the contact line differs.
+            </p>
+          </div>
+        )}
+        {chat}
+      </aside>
+    </div>
   );
 }

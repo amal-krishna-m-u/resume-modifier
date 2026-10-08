@@ -73,8 +73,8 @@ export function App() {
 
   return (
     <div className="min-h-screen">
-      <header className="border-b border-stone-200 dark:border-stone-800 sticky top-0 bg-stone-50/90 dark:bg-stone-950/90 backdrop-blur z-10">
-        <div className="mx-auto max-w-7xl px-4 h-14 flex items-center gap-6">
+      <header className="border-b border-stone-200 dark:border-stone-800 sticky top-0 bg-stone-50/85 dark:bg-stone-950/85 backdrop-blur-md z-20">
+        <div className="mx-auto max-w-7xl px-4 py-2 min-h-14 flex flex-wrap items-center gap-x-6 gap-y-2">
           <button
             onClick={() => navigate({ name: "new" })}
             className="font-semibold tracking-tight hover:opacity-70"
@@ -95,7 +95,7 @@ export function App() {
               Knowledge base
             </Tab>
           </nav>
-          <div className="ml-auto flex items-center gap-3">
+          <div className="ml-auto flex flex-wrap items-center gap-3">
             {/* A running job stays reachable from every screen. Without this,
                 navigating away from one meant losing track of it entirely. */}
             {active.map((run) => (
@@ -122,7 +122,7 @@ export function App() {
 
             {runs.data && runs.data.runs.length > 0 && (
               <select
-                className="text-sm bg-transparent border border-stone-300 dark:border-stone-700 rounded px-2 py-1 max-w-64"
+                className="select max-w-40 sm:max-w-64"
                 value={view.name === "run" ? view.id : ""}
                 onChange={(event) =>
                   event.target.value && navigate({ name: "run", id: event.target.value })
@@ -143,7 +143,12 @@ export function App() {
       </header>
 
       <main className="mx-auto max-w-7xl px-4 py-8">
-        {view.name === "new" && <NewRun onStarted={(id) => navigate({ name: "run", id })} />}
+        {view.name === "new" && (
+          <NewRun
+            onStarted={(id) => navigate({ name: "run", id })}
+            onOpen={(id) => navigate({ name: "run", id })}
+          />
+        )}
         {view.name === "run" && <RunScreen runId={view.id} />}
         {view.name === "kb" && <KbBrowser />}
         {view.name === "tracker" && (
