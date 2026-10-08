@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../lib/api";
 import type { IndexRow } from "../lib/types";
 import { EntryEditor } from "../components/EntryEditor";
+import { NewEntry } from "../components/NewEntry";
+import { GUIDES } from "../lib/guidance";
 
 const TYPE_ORDER = [
   "role", "fact", "project", "blog", "education", "certification", "award",
@@ -16,7 +18,8 @@ const TYPE_ORDER = [
  */
 export function KbBrowser() {
   const [selected, setSelected] = useState<{ type: string; id: string } | null>(null);
-  const [creating, setCreating] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
+  const [creating, setCreating] = useState<{ type: string; parent?: string } | null>(null);
   const [filter, setFilter] = useState("");
 
   const index = useQuery({ queryKey: ["kb", "index"], queryFn: api.kbIndex });
@@ -42,6 +45,10 @@ export function KbBrowser() {
     return grouped;
   }, [entries]);
 
+  const thinCount = entries.filter(
+    (entry) => entry.body_words < (GUIDES[entry.type]?.target ?? 80) * 0.5,
+  ).length;
+
   const issuesByEntry = useMemo(() => {
     const grouped = new Map<string, number>();
     for (const issue of [...(validation.data?.errors ?? []), ...(validation.data?.warnings ?? [])]) {
@@ -60,23 +67,16 @@ export function KbBrowser() {
             placeholder="Search id, title or tag"
             className="flex-1 rounded border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-3 py-2 text-sm"
           />
-          <select
-            value=""
-            onChange={(event) => {
-              if (event.target.value) {
-                setCreating(event.target.value);
-                setSelected(null);
-              }
+          <button
+            onClick={() => {
+              setPicking(true);
+              setCreating(null);
+              setSelected(null);
             }}
-            className="rounded border border-stone-300 dark:border-stone-700 bg-white dark:bg-stone-900 px-2 text-sm"
+            className="rounded bg-stone-900 dark:bg-stone-100 text-stone-50 dark:text-stone-900 px-3 py-2 text-sm font-medium whitespace-nowrap hover:opacity-90"
           >
-            <option value="">+ New</option>
-            {TYPE_ORDER.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
-            ))}
-          </select>
+            + New
+          </button>
         </div>
 
         {validation.data && !validation.data.ok && (
@@ -103,9 +103,17 @@ export function KbBrowser() {
           </div>
         )}
 
-        <div className="text-xs text-stone-500 tabular-nums">
-          {entries.length} entries · {(index.data?.estimated_corpus_tokens ?? 0).toLocaleString()}{" "}
-          est. tokens · {index.data?.taxonomy_terms ?? 0} tags
+        <div className="text-xs text-stone-500 tabular-nums space-y-0.5">
+          <div>
+            {entries.length} entries · {(index.data?.estimated_corpus_tokens ?? 0).toLocaleString()}{" "}
+            est. tokens · {index.data?.taxonomy_terms ?? 0} tags
+          </div>
+          {thinCount > 0 && (
+            <div className="text-amber-700 dark:text-amber-400">
+              {thinCount} of {entries.length} are thin — expanding them is what raises the
+              match quality.
+            </div>
+          )}
         </div>
 
         <div className="space-y-4 max-h-[36rem] overflow-y-auto pr-1">
@@ -119,6 +127,7 @@ export function KbBrowser() {
                   onClick={() => {
                     setSelected({ type: role.type, id: role.id });
                     setCreating(null);
+                    setPicking(false);
                   }}
                 />
                 <ul className="ml-3 mt-1 space-y-0.5 border-l border-stone-200 dark:border-stone-800 pl-2">
@@ -131,6 +140,7 @@ export function KbBrowser() {
                         onClick={() => {
                           setSelected({ type: fact.type, id: fact.id });
                           setCreating(null);
+                          setPicking(false);
                         }}
                       />
                     </li>
@@ -157,6 +167,7 @@ export function KbBrowser() {
                         onClick={() => {
                           setSelected({ type: entry.type, id: entry.id });
                           setCreating(null);
+                          setPicking(false);
                         }}
                       />
                     </li>
@@ -168,13 +179,32 @@ export function KbBrowser() {
         </div>
       </aside>
 
-      {creating ? (
-        <EntryEditor key={`new-${creating}`} type={creating} onSaved={(id) => {
-          setCreating(null);
-          setSelected({ type: creating, id });
-        }} />
+      {picking ? (
+        <NewEntry
+          onPick={(type, parent) => {
+            setPicking(false);
+            setCreating({ type, parent });
+          }}
+          onCancel={() => setPicking(false)}
+        />
+      ) : creating ? (
+        <EntryEditor
+          key={`new-${creating.type}-${creating.parent ?? ""}`}
+          type={creating.type}
+          parent={creating.parent}
+          onSaved={(id) => {
+            const type = creating.type;
+            setCreating(null);
+            setSelected({ type, id });
+          }}
+        />
       ) : selected ? (
-        <EntryEditor key={selected.id} type={selected.type} id={selected.id} />
+        <EntryEditor
+          key={selected.id}
+          type={selected.type}
+          id={selected.id}
+          onDeleted={() => setSelected(null)}
+        />
       ) : (
         <Empty />
       )}
@@ -210,6 +240,7 @@ function Row({
             {entry.visibility}
           </span>
         )}
+        <Thin entry={entry} />
         <DepthDot depth={entry.depth} />
       </div>
       <div className="flex gap-1 mt-0.5">
@@ -223,6 +254,27 @@ function Row({
         )}
       </div>
     </button>
+  );
+}
+
+/** A bar showing how much body an entry has against what its type needs.
+ *
+ * Selection can only pick detail that exists. A one-line body is a resume
+ * bullet, which is what the writer is meant to produce rather than consume —
+ * so a thin entry is the single most common reason a real achievement comes
+ * back "matched, but not strongly". Showing it in the list means finding
+ * what to expand does not require opening everything. */
+function Thin({ entry }: { entry: IndexRow }) {
+  const target = GUIDES[entry.type]?.target ?? 80;
+  const fill = Math.min(1, entry.body_words / target);
+  const tone = fill >= 0.5 ? "bg-emerald-500" : fill > 0 ? "bg-amber-500" : "bg-stone-300";
+  return (
+    <span
+      title={`${entry.body_words} words of body — aim for about ${target}`}
+      className="w-8 h-1 rounded bg-stone-200 dark:bg-stone-800 overflow-hidden shrink-0"
+    >
+      <span className={`block h-full ${tone}`} style={{ width: `${Math.max(fill * 100, 6)}%` }} />
+    </span>
   );
 }
 

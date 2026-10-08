@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, RequestFailed } from "../lib/api";
+import { BodyEditor } from "./BodyEditor";
 
 type Metric = { value: string; what: string };
 
@@ -50,11 +51,15 @@ const VISIBILITY_HELP: Record<string, string> = {
 export function EntryEditor({
   type,
   id,
+  parent,
   onSaved,
+  onDeleted,
 }: {
   type: string;
   id?: string;
+  parent?: string;
   onSaved?: (id: string) => void;
+  onDeleted?: () => void;
 }) {
   const queryClient = useQueryClient();
   const creating = !id;
@@ -83,6 +88,7 @@ export function EntryEditor({
         id: "",
         type,
         title: "",
+        parent,
         tags: [],
         metrics: [],
         depth: "working",
@@ -141,9 +147,24 @@ export function EntryEditor({
     },
   });
 
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const remove = useMutation({
+    mutationFn: () => api.deleteEntry(type, id!),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["kb"] });
+      onDeleted?.();
+    },
+  });
+
   if (!fields) return <p className="text-sm text-stone-500">Loading…</p>;
 
   const failure = save.error instanceof RequestFailed ? save.error : null;
+  const deleteFailure = remove.error instanceof RequestFailed ? remove.error : null;
+  const referrers =
+    deleteFailure?.code === "still_referenced"
+      ? ((deleteFailure.detail as { referrers?: string[] } | null)?.referrers ?? [])
+      : [];
   const set = (patch: Partial<Fields>) => setFields({ ...fields, ...patch });
 
   return (
@@ -301,17 +322,7 @@ export function EntryEditor({
 
           <MetricRows metrics={fields.metrics} onChange={(metrics) => set({ metrics })} />
 
-          <Field
-            label="body"
-            hint="What the selector reads. Write more here than any resume would use — detail that is not written down can never be selected."
-          >
-            <textarea
-              value={body}
-              onChange={(event) => setBody(event.target.value)}
-              rows={12}
-              className={`${input} font-mono leading-relaxed`}
-            />
-          </Field>
+          <BodyEditor value={body} onChange={setBody} type={type} />
         </div>
       )}
 
@@ -339,6 +350,72 @@ export function EntryEditor({
           {save.data.warnings.map((warning, i) => (
             <div key={i}>{warning.message}</div>
           ))}
+        </div>
+      )}
+
+      {!creating && (
+        <div className="rounded border border-stone-200 dark:border-stone-800 p-3">
+          {!confirmingDelete ? (
+            <button
+              onClick={() => setConfirmingDelete(true)}
+              className="text-sm text-stone-500 hover:text-red-700 dark:hover:text-red-400"
+            >
+              Delete this entry…
+            </button>
+          ) : (
+            <div className="space-y-2">
+              <p className="text-sm">
+                Delete <code className="font-mono text-xs">{id}</code>? It is committed to your
+                local <code className="font-mono text-xs">kb/</code> repository first, so it can
+                be restored from history.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => remove.mutate()}
+                  disabled={remove.isPending}
+                  className="rounded bg-red-700 text-white px-3 py-1.5 text-sm font-medium disabled:opacity-40"
+                >
+                  {remove.isPending ? "Deleting…" : "Yes, delete"}
+                </button>
+                <button
+                  onClick={() => {
+                    setConfirmingDelete(false);
+                    remove.reset();
+                  }}
+                  className="rounded border border-stone-300 dark:border-stone-700 px-3 py-1.5 text-sm"
+                >
+                  Keep it
+                </button>
+              </div>
+            </div>
+          )}
+
+          {deleteFailure && (
+            <div className="mt-3 rounded border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/30 p-3 text-sm">
+              <div className="font-medium text-red-800 dark:text-red-300">
+                {deleteFailure.message}
+              </div>
+              {referrers.length > 0 && (
+                <>
+                  <p className="mt-1 text-xs text-red-700 dark:text-red-400">
+                    Deleting it now would leave these pointing at nothing — facts with no parent
+                    render nowhere, and a skill with no evidence is where resume inflation
+                    lives. Remove the references first:
+                  </p>
+                  <ul className="mt-1.5 flex flex-wrap gap-1.5">
+                    {referrers.map((referrer) => (
+                      <li
+                        key={referrer}
+                        className="rounded bg-red-100 dark:bg-red-950 px-2 py-0.5 text-xs font-mono"
+                      >
+                        {referrer}
+                      </li>
+                    ))}
+                  </ul>
+                </>
+              )}
+            </div>
+          )}
         </div>
       )}
 
