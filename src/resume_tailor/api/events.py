@@ -50,9 +50,13 @@ class Channel:
         self._subscribers: set[asyncio.Queue] = set()
         self._history: deque[str] = deque(maxlen=self.history_size)
 
-    def publish(self, event: str, data: Any) -> None:
+    def publish(self, event: str, data: Any, *, replay: bool = True) -> None:
+        """`replay=False` is for snapshots that supersede each other: they reach
+        live subscribers but are not kept, or a minute of streaming output would
+        push the run's earlier calls out of the buffer."""
         message = format_event(event, data)
-        self._history.append(message)
+        if replay:
+            self._history.append(message)
         for queue in list(self._subscribers):
             # Dropped, not awaited: a browser tab that stopped reading must
             # never stall a pipeline run.
@@ -93,9 +97,21 @@ class Hub:
     def __init__(self) -> None:
         self.kb = Channel()
         self._runs: dict[str, Channel] = defaultdict(Channel)
+        #: What agents are doing right now. Much chattier than stage events
+        #: (output snapshots, reasoning), so it has its own channel and a larger
+        #: replay buffer: a page opened mid-run should still see the whole run.
+        self._traces: dict[str, Channel] = defaultdict(
+            lambda: Channel(maxsize=400, history_size=400)
+        )
 
     def run(self, run_id: str) -> Channel:
         return self._runs[run_id]
+
+    def trace(self, key: str) -> Channel:
+        return self._traces[key]
+
+    def publish_trace(self, key: str, event: str, data: dict) -> None:
+        self.trace(key).publish(event, data, replay=event not in ("output", "thinking"))
 
     def publish_stage(self, run_id: str, stage: str, status: str, detail: dict) -> None:
         self.run(run_id).publish("stage", {"stage": stage, "status": status, **detail})

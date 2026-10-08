@@ -1,3 +1,4 @@
+import { LiveTrace } from "./LiveTrace";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, RequestFailed } from "../lib/api";
@@ -157,6 +158,7 @@ export function KbChat({
             Reading your knowledge base and working out what to propose…
           </div>
         )}
+        {running && <LiveTrace traceKey={`kb-chat:${scope}`} defaultOpen onlyWhileActive />}
       </div>
 
       {pending.length > 1 && (

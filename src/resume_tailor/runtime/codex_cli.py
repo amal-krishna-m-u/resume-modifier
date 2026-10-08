@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+from typing import Any
 
 from .base import (
     AgentResult,
@@ -39,6 +40,7 @@ from .base import (
     Usage,
 )
 from .json_repair import parse_or_repair
+from .live import current_stream
 
 BINARY = "codex"
 
@@ -92,15 +94,25 @@ class CodexCliRunner:
             command += ["--model", model]
         command.append("-")  # the prompt arrives on stdin
 
+        stream = current_stream()
+        if stream is not None and stream.want_reasoning:
+            command[command.index("-")] = "-c"
+            command += ["model_reasoning_summary=detailed", "-"]
+
         process = await asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            # A whole draft is one event line; the default 64 KB line limit
+            # would turn a long reply into a crash.
+            limit=16 * 1024 * 1024,
         )
         payload = f"{agent.system_prompt}\n\n{prompt}".encode()
         try:
-            out, err = await asyncio.wait_for(process.communicate(payload), timeout=self.timeout)
+            out, err = await asyncio.wait_for(
+                self._converse(process, payload, stream), timeout=self.timeout
+            )
         except TimeoutError as exc:
             process.kill()
             raise BackendError(f"{self.name}: no reply within {self.timeout}s") from exc
@@ -119,6 +131,45 @@ class CodexCliRunner:
             raise self._explain(stderr or f"exited {process.returncode}")
 
         return text, usage
+
+    @staticmethod
+    async def _converse(process: Any, payload: bytes, stream: Any) -> tuple[bytes, bytes]:
+        """Send the prompt, then read events as they arrive.
+
+        Reading line by line rather than waiting for the process to finish is
+        what lets the live view show reasoning while Codex is still working.
+        """
+        process.stdin.write(payload)
+        await process.stdin.drain()
+        process.stdin.close()
+
+        lines: list[bytes] = []
+
+        async def read_events() -> None:
+            async for raw in process.stdout:
+                lines.append(raw)
+                if stream is not None:
+                    CodexCliRunner._live(stream, raw)
+
+        async def read_errors() -> bytes:
+            return await process.stderr.read()
+
+        _, err, _ = await asyncio.gather(read_events(), read_errors(), process.wait())
+        return b"".join(lines), err
+
+    @staticmethod
+    def _live(stream: Any, raw: bytes) -> None:
+        try:
+            event = json.loads(raw)
+        except ValueError:
+            return
+        item = event.get("item") or {}
+        if event.get("type") != "item.completed":
+            return
+        if item.get("type") == "reasoning":
+            stream.thought(item.get("text") or item.get("summary") or "")
+        elif item.get("type") == "agent_message":
+            stream.replace_output(item.get("text") or "")
 
     def _explain(self, message: str) -> BackendError:
         lowered = message.lower()

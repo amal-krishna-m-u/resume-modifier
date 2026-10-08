@@ -69,6 +69,7 @@ export interface BackendTest {
 }
 
 export interface Observability {
+  show_reasoning: boolean;
   local_log: boolean;
   record_content: boolean;
   langfuse: { enabled: boolean; host: string; keys_set: boolean; refused: string | null };
@@ -94,7 +95,9 @@ export const api = {
   observability: () => request<Observability>("/observability"),
   health: () => request<Health>("/health"),
   settings: () => request<Settings>("/settings"),
-  saveSettings: (body: Partial<Pick<Settings, "backend" | "models" | "openai_compat">>) =>
+  saveSettings: (body: Partial<Pick<Settings, "backend" | "models" | "openai_compat">> & {
+      observability?: { show_reasoning?: boolean };
+    }) =>
     request<Settings>("/settings", { method: "PUT", body: JSON.stringify(body) }),
   testBackend: (backend: string, model?: string) =>
     request<BackendTest>("/settings/test", {

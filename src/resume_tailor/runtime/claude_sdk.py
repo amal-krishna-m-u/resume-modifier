@@ -25,6 +25,7 @@ from .base import (
     Usage,
 )
 from .json_repair import parse_or_repair
+from .live import current_stream
 
 #: Removed explicitly, because `allowed_tools` does **not** restrict anything.
 #:
@@ -32,6 +33,9 @@ from .json_repair import parse_or_repair
 #: schemas. Measured 2026-10-06: `allowed_tools=[]` alone cost 18,184 input
 #: tokens; adding `disallowed_tools` brought the same call to 7,753. The first
 #: probe written for this project had exactly that bug.
+#: Tokens of reasoning to allow when the live view asks for it.
+REASONING_BUDGET = 4000
+
 DISALLOWED_TOOLS = [
     "Bash",
     "Read",
@@ -93,6 +97,18 @@ class ClaudeSdkRunner:
         model = agent.model or self.model
         if model:
             options["model"] = model
+        stream = current_stream()
+        if stream is not None:
+            # Fragments as they are written, for the live view. Harmless when
+            # nothing is listening; the final message is still what is returned.
+            options["include_partial_messages"] = True
+            if stream.want_reasoning:
+                options["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": REASONING_BUDGET,
+                    # Without this the API returns the block empty.
+                    "display": "summarized",
+                }
         return ClaudeAgentOptions(**options)
 
     @staticmethod
@@ -127,8 +143,15 @@ class ClaudeSdkRunner:
         session_id: str | None = None
 
         try:
+            stream = current_stream()
             async for message in query(prompt=prompt, options=self._options(agent)):
+                if stream is not None and hasattr(message, "event"):
+                    self._live(stream, message.event)
+                    continue
                 for block in getattr(message, "content", None) or []:
+                    thought = getattr(block, "thinking", None)
+                    if thought and stream is not None and not stream.has_thoughts:
+                        stream.thought(thought)
                     text = getattr(block, "text", None)
                     if text:
                         chunks.append(text)
@@ -138,6 +161,17 @@ class ClaudeSdkRunner:
             raise self._translate(exc) from exc
 
         return "".join(chunks), usage, session_id
+
+    @staticmethod
+    def _live(stream: Any, event: Any) -> None:
+        """Forward a partial-message event to the live view."""
+        if not isinstance(event, dict) or event.get("type") != "content_block_delta":
+            return
+        delta = event.get("delta") or {}
+        if delta.get("type") == "text_delta":
+            stream.delta(delta.get("text") or "")
+        elif delta.get("type") == "thinking_delta":
+            stream.thinking_fragment(delta.get("thinking") or "")
 
     def _translate(self, exc: Exception) -> Exception:
         """Turn an SDK exception into something the user can act on.
