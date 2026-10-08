@@ -2,7 +2,19 @@
 
 A local, single-user system that tailors a resume to a job description from a complete personal career knowledge base — then shows what matched, what's missing, and lets you revise by chat before exporting a PDF.
 
-**Status:** implementation underway. The specification is complete and merged; the knowledge base layer is built. See [Milestones](#milestones).
+**Status:** milestones M1–M8 are built and merged. It runs end to end today on Claude and on Codex: paste a posting, watch the agents work, review what matched and what's missing, revise by chat, export PDFs, and archive what you sent. See [What it does today](#what-it-does-today), [Current challenges](#current-challenges) and [Future scope](#future-scope).
+
+## What it does today
+
+- **Tailors from a full knowledge base.** Five agents (Analyst, Selector, Recall, Writer, Validator); Selector and Recall each read every fact in full, and a Validator cuts any claim without a recorded source.
+- **Review before export.** Matched and missing requirements, who selected each fact, what the validator cut, then Direct and Referral PDFs shown inline with a separate Download.
+- **Revise by chat.** Each reply, the exact bullets changed and any validator cuts are visible; the PDF refreshes in place.
+- **Maintain the knowledge base three ways.** Form, raw Markdown, or a chat assistant that proposes small diffs, pre-checks them, and only writes what you accept.
+- **Choose the model in Settings.** Claude (SDK or CLI), Codex, or any OpenAI-compatible endpoint, with a per-backend model and a connection test.
+- **Watch the agents live.** An activity panel shows each call, its streaming output, token use, and reasoning when you opt in.
+- **Trace and evaluate.** A local trace log, optional self-hosted Langfuse, and evals that compare prompt versions and models, including a fabrication probe for the Validator.
+- **Archive what you applied with.** A frozen snapshot of every fact as sent, plus a tracker.
+- **Stays private.** Binds to 127.0.0.1, the knowledge base lives in its own remote-less git repository, and traces, evals, runs and applications are gitignored.
 
 ## The problem it solves
 
@@ -24,6 +36,7 @@ Eliminating silent omission is the point. Everything else is mechanism.
 | [docs/spec-06-provider-backends.md](docs/spec-06-provider-backends.md) | Running on providers other than Claude |
 | [docs/spec-07-applications-and-tracker.md](docs/spec-07-applications-and-tracker.md) | Application archive, tracker, dual contact sets |
 | [docs/open-questions.md](docs/open-questions.md) | What's still undecided and what each answer blocks |
+| [docs/future-scope.md](docs/future-scope.md) | What is deliberately not built yet (API-key providers, hosting) |
 
 `traceability.md` is the fast review surface: every requirement appears there alongside the user's own words that produced it. If something asked for isn't in that table, the PRD is incomplete.
 
@@ -422,6 +435,36 @@ rt eval compare baseline tighter-selector # which prompt versions differ, and th
 ```
 
 Scores per case: `recall` (expected facts found), `exclusions` (picks you marked wrong), `stability` (agreement with the baseline run), and `validator_catches_fabrication` — a made-up bullet is injected into a real draft and the Validator must cut or flag it. **A case built from a run is `reviewed: false`: its scores mean "consistent with that run", not "correct", until you correct the file.** `compare` says when nothing differs between two results, so run-to-run noise isn't mistaken for improvement. Cases and results live in `evals/` (gitignored: they contain real postings).
+
+## Current challenges
+
+Honest limits as of today, roughly in order of how much they affect the output.
+
+**Your knowledge base is thin.** Selection can only choose what is recorded, and it is the biggest limit on quality. On the real data the most-selected fact held 21 words, and the whole knowledge base about 357. The writer compresses detail; it cannot invent it. The *Expand these first* list in the knowledge base screen ranks entries by how often runs actually used them, so start there.
+
+**Whole-corpus selection costs tokens and will not scale forever.** Every call resends the entire knowledge base. Claude caches that prefix (about 100% of prompt tokens cached in one run); Codex cached about 38%. The OpenAI-compatible backend has no caching, so a metered API pays full price on every call. The provisional re-think point is 500 entries or 100K tokens ([OQ-2](docs/open-questions.md)).
+
+**Model behaviour differs between backends, and nothing enforces a schema.** Codex returned metrics as plain strings and the curator's reply claimed they were recorded, so proposals are now sanitised and the reply corrected, but each new backend can surface another shape. The Validator is the one agent that fails invisibly, which is why it has its own fabrication probe.
+
+**Evals are only as good as their cases.** A case built from a run is `reviewed: false`: its scores mean "consistent with that run", not "correct", until you correct `must_include` and `must_exclude`. There is one case today, so a delta between two results can still be noise; `rt eval compare` says when nothing differs.
+
+**Reasoning visibility is limited by the providers.** Codex exposes short reasoning summaries (headings), not a full chain of thought. Claude shows thinking only when the model decides a task needs it. `claude_cli` and `openai_compat` show start, finish and tokens only. Turning reasoning on costs tokens on every call.
+
+**Some pieces are unverified.** The Langfuse Docker compose has not been run (no Docker on the development machine); the exporter is checked only against a stand-in for Langfuse's endpoint, and `rt trace status` is the real check. API-key use (`ANTHROPIC_API_KEY`, Vertex, Bedrock) is untested. Whether Codex works on a free ChatGPT plan is unconfirmed.
+
+**Subscription limits apply.** The default backends run on your Claude or ChatGPT subscription, so heavy use (a full run is five calls, plus every revision and chat turn) can hit rate limits ([RK-2](docs/PRD.md)).
+
+**One person, one machine.** No login, local-only binding, file-and-git storage. Hosting and multi-user are future scope, not a configuration change.
+
+**Smaller gaps.**
+- A job link cannot be fetched; paste the text or upload a file.
+- Recall's tag suggestions are not yet routed into the chat inbox.
+- LaTeX output matches the section order and structure of the original PDF exactly, but font metrics differ slightly (accepted).
+- A run in progress keeps the backend it started with; changing it in Settings applies to the next run, and is refused while one is active.
+
+## Future scope
+
+Not built yet, on purpose: API-key providers as first-class backends (Anthropic, Vertex, Bedrock, OpenAI, Gemini; no CLI), and hosting (auth, HTTPS, persistent storage). What exists today, what is missing and why it waits: [docs/future-scope.md](docs/future-scope.md).
 
 ## Next step
 
