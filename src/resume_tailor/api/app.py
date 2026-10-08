@@ -12,7 +12,9 @@ LAN would hand both to anyone on the network.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -51,7 +53,7 @@ from ..render.compile import compile_pdf
 from ..render.compile import healthcheck as render_health
 from ..render.document import apply_validation, document_from_draft
 from ..render.latex import Geometry, render_document
-from ..runtime import build_backend
+from ..runtime import BACKEND_INFO, build_backend
 from . import errors
 from .events import Hub, KbWatcher
 
@@ -94,6 +96,8 @@ class Context:
 
 
 def create_app(root: Path | None = None) -> FastAPI:
+    if root is None and os.environ.get("RESUME_TAILOR_ROOT"):
+        root = Path(os.environ["RESUME_TAILOR_ROOT"])
     context = Context(root)
 
     @asynccontextmanager
@@ -206,6 +210,87 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
                     row["strong"] += 1
         facts.pop("", None)
         return {"runs": counted, "facts": facts}
+
+    # -- settings -----------------------------------------------------------
+
+    def _settings_view() -> dict[str, Any]:
+        config = context.config
+        override = os.environ.get("RUNNER_BACKEND")
+        return {
+            "backend": config.backend,
+            "effective_backend": config.backend_name(),
+            "env_override": bool(override),
+            "models": {name: config.backend_models.get(name, "") for name in BACKEND_INFO},
+            "openai_compat": vars(config.openai_compat),
+            "backends": [{"name": name, **info} for name, info in BACKEND_INFO.items()],
+            "file": str(config.source.name) if config.source else None,
+        }
+
+    @router.get("/settings")
+    async def settings_get() -> dict[str, Any]:
+        return _settings_view()
+
+    @router.put("/settings")
+    async def settings_put(payload: dict = Body(...)) -> dict[str, Any]:
+        config = context.config
+        backend = payload.get("backend", config.backend)
+        if backend not in BACKEND_INFO:
+            raise WriteError(
+                f"unknown backend {backend!r}",
+                remedy=f"Choose one of: {', '.join(BACKEND_INFO)}.",
+            )
+        if context.active_runs or context.chat_running:
+            raise errors.RunBusy(
+                "a run or conversation is in progress",
+                remedy="Change the backend once it finishes — mid-run it would not apply anyway.",
+            )
+        models = payload.get("models")
+        if models is not None:
+            config.backend_models = {
+                k: str(v).strip()
+                for k, v in models.items()
+                if k in BACKEND_INFO and str(v or "").strip()
+            }
+        compat = payload.get("openai_compat")
+        if compat:
+            for key in ("base_url", "model", "api_key_env"):
+                if key in compat:
+                    setattr(config.openai_compat, key, str(compat[key]).strip())
+            if "context_tokens" in compat:
+                config.openai_compat.context_tokens = max(1000, int(compat["context_tokens"]))
+        config.backend = backend
+        config.save(context.root)
+        return _settings_view()
+
+    @router.post("/settings/test")
+    async def settings_test(payload: dict = Body(...)) -> dict[str, Any]:
+        """Check a backend without saving it: binary present, logged in, window."""
+        name = payload.get("backend")
+        if name not in BACKEND_INFO:
+            raise WriteError(f"unknown backend {name!r}", remedy="Pick one from the list.")
+        trial = copy.deepcopy(context.config)
+        trial.backend = name
+        if payload.get("model"):
+            trial.backend_models[name] = str(payload["model"]).strip()
+        try:
+            runner = build_backend(trial, name)
+            report = await runner.healthcheck()
+        except Exception as exc:  # noqa: BLE001 — a probe reports, it does not raise
+            return {"ok": False, "detail": str(exc), "login": BACKEND_INFO[name]["login"]}
+        tokens = context.corpus().estimated_tokens()
+        fits, detail = True, report.detail
+        try:
+            runner.capabilities.assert_corpus_fits(name, tokens)
+        except Exception as exc:  # noqa: BLE001
+            fits, detail = False, str(exc)
+        return {
+            "ok": report.ok and fits,
+            "detail": detail,
+            "credential": report.credential,
+            "login": BACKEND_INFO[name]["login"],
+            "window": runner.capabilities.min_context_tokens,
+            "fits": fits,
+        }
 
     # -- knowledge-base chat (AC-R13.2, spec-04 §6.8) ---------------------------
 

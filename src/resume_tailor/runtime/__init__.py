@@ -35,10 +35,42 @@ __all__ = [
     "RunnerBackend",
     "Usage",
     "BACKENDS",
+    "BACKEND_INFO",
     "build_backend",
 ]
 
 BACKENDS = ("claude_sdk", "claude_cli", "codex_cli", "openai_compat", "fake")
+
+
+#: What the Settings screen shows. `models` are suggestions only, never a
+#: whitelist: model names change faster than this file does, and an empty model
+#: means "that CLI's own default", which is usually right.
+BACKEND_INFO: dict[str, dict] = {
+    "claude_sdk": {
+        "label": "Claude (Agent SDK)",
+        "blurb": "Your Claude subscription through the Agent SDK. The default; leanest on tokens.",
+        "login": "claude login",
+        "models": ["opus", "sonnet", "haiku"],
+    },
+    "claude_cli": {
+        "label": "Claude (CLI)",
+        "blurb": "Runs the `claude` binary once per agent. Slower, same subscription.",
+        "login": "claude login",
+        "models": ["opus", "sonnet", "haiku"],
+    },
+    "codex_cli": {
+        "label": "Codex (CLI)",
+        "blurb": "Your ChatGPT/Codex login. Leave the model empty to use Codex's own default.",
+        "login": "codex login",
+        "models": [],
+    },
+    "openai_compat": {
+        "label": "OpenAI-compatible server",
+        "blurb": "Ollama, LM Studio, vLLM or any /v1 endpoint. Small windows will refuse a big KB.",
+        "login": None,
+        "models": [],
+    },
+}
 
 
 def build_backend(config: Config | None = None, name: str | None = None) -> RunnerBackend:
@@ -53,17 +85,17 @@ def build_backend(config: Config | None = None, name: str | None = None) -> Runn
     if name == "claude_sdk":
         from .claude_sdk import ClaudeSdkRunner
 
-        return ClaudeSdkRunner(model=config.models.default)
+        return ClaudeSdkRunner(model=config.model_for(name))
 
     if name == "claude_cli":
         from .claude_cli import ClaudeCliRunner
 
-        return ClaudeCliRunner(model=config.models.default)
+        return ClaudeCliRunner(model=config.model_for(name))
 
     if name == "codex_cli":
         from .codex_cli import CodexCliRunner
 
-        return CodexCliRunner(model=config.models.default)
+        return CodexCliRunner(model=config.model_for(name))
 
     if name == "openai_compat":
         from .openai_compat import OpenAICompatRunner

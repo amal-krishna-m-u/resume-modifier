@@ -767,3 +767,33 @@ def test_archiving_names_the_scope(project: Path) -> None:
     store.append({"role": "user", "text": "x"})
     archived = store.archive()
     assert archived and archived.name.startswith("kb-chat--acme-engineer-")
+
+
+# ---- shape tolerance (found live with Codex) ----------------------------------
+
+
+def test_string_metrics_are_dropped_and_the_person_is_told() -> None:
+    """Codex returned `add_metrics: ["200 questions (…)"]`. Dropping them silently
+    while the reply said "recorded the metric" is exactly the false claim the
+    curator exists to avoid."""
+    from resume_tailor.pipeline.curator import sanitise
+
+    clean, dropped = sanitise(
+        {
+            "op": "update",
+            "type": "fact",
+            "id": "x",
+            "add_metrics": ["200 questions (eval set)", {"value": "5", "what": "reviewers"}],
+        }
+    )
+    assert clean["add_metrics"] == [{"value": "5", "what": "reviewers"}]
+    assert dropped == ["200 questions (eval set)"]
+
+
+def test_malformed_field_shapes_do_not_crash() -> None:
+    from resume_tailor.pipeline.curator import sanitise
+
+    clean, _ = sanitise(
+        {"op": "update", "type": "fact", "id": "x", "fields": "oops", "add_tags": "ml", "body": 3}
+    )
+    assert clean["fields"] == {} and clean["add_tags"] == [] and clean["body"] is None

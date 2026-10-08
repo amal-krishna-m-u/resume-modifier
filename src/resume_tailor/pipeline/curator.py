@@ -135,6 +135,37 @@ def _visible_body(body: str) -> str:
     return split_todo(body)[0]
 
 
+def sanitise(raw: dict[str, Any]) -> tuple[dict[str, Any], list[str]]:
+    """Coerce a proposal into the shapes `compose` expects, reporting what was lost.
+
+    Models differ in how closely they follow a schema, and none of the backends
+    enforce it: Codex returned `add_metrics` as plain strings, which were
+    silently dropped while its reply said they had been recorded. Anything that
+    cannot be used is named so the person is told rather than misled.
+    """
+    clean = dict(raw)
+    dropped: list[str] = []
+
+    metrics = []
+    for item in raw.get("add_metrics") or []:
+        if isinstance(item, dict) and item.get("value") and item.get("what"):
+            metrics.append({"value": str(item["value"]), "what": str(item["what"])})
+        else:
+            dropped.append(item if isinstance(item, str) else json.dumps(item))
+    clean["add_metrics"] = metrics
+
+    tags = raw.get("add_tags") or []
+    clean["add_tags"] = (
+        [str(t) for t in tags if isinstance(t, str) and t.strip()] if isinstance(tags, list) else []
+    )
+    if not isinstance(raw.get("fields") or {}, dict):
+        clean["fields"] = {}
+    for key in ("body", "body_append"):
+        if raw.get(key) is not None and not isinstance(raw[key], str):
+            clean[key] = None
+    return clean, dropped
+
+
 def build_proposal(
     kb_dir: Path,
     raw: dict[str, Any],
@@ -342,10 +373,13 @@ async def curate(
 
     proposals: list[dict[str, Any]] = []
     overlay: list[tuple[str, str, str]] = []
+    lost: list[str] = []
     for raw in data.get("proposals") or []:
         if not isinstance(raw, dict):
             continue
+        raw, dropped = sanitise(raw)
         proposal = build_proposal(kb_dir, raw, tuple(overlay))
+        lost.extend(dropped)
         proposals.append(proposal)
         # Later proposals are validated as if this one were accepted, so a fact
         # under a brand-new role does not report a parent that "does not exist".
@@ -353,11 +387,21 @@ async def curate(
             overlay.append((proposal["type"], proposal["entry_id"], proposal["raw"]))
 
     questions = [str(q) for q in (data.get("questions") or []) if str(q).strip()]
+    text = str(data.get("reply") or "").strip() or (
+        "Here is what I'd propose." if proposals else "Tell me more."
+    )
+    if lost:
+        # The reply was written before these were discarded, so it may claim them.
+        text += (
+            "\n\nCorrection: I could not record "
+            + "; ".join(f"“{item}”" for item in lost)
+            + " as a metric — a metric needs the figure and what it measures. "
+            "Tell me those and I will add it."
+        )
     return {
         "role": "assistant",
         "at": now(),
-        "text": str(data.get("reply") or "").strip()
-        or ("Here is what I'd propose." if proposals else "Tell me more."),
+        "text": text,
         "questions": questions,
         "proposals": proposals,
         "usage": {

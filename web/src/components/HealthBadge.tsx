@@ -6,7 +6,7 @@ import { api } from "../lib/api";
  * Shows the two things that stop a run before it starts — an unavailable
  * backend and a corpus that no longer fits the context window — plus the one
  * that would publish the career record. */
-export function HealthBadge() {
+export function HealthBadge({ onClick }: { onClick?: () => void }) {
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, refetchInterval: 30_000 });
 
   if (!health.data) return <span className="text-xs text-stone-400">…</span>;
@@ -24,14 +24,15 @@ export function HealthBadge() {
   const ok = problems.length === 0;
 
   return (
-    <div
-      className="flex items-center gap-2 text-xs"
+    <button
+      onClick={onClick}
+      className="flex items-center gap-2 text-xs hover:opacity-70"
       title={problems.join("\n") || `${backend.name} · ${corpus.entries} entries`}
     >
       <span className={`size-2 rounded-full ${ok ? "bg-emerald-500" : "bg-amber-500"}`} />
       <span className="hidden sm:inline text-stone-500 dark:text-stone-400 tabular-nums">
         {backend.name} · {corpus.entries} entries
       </span>
-    </div>
+    </button>
   );
 }

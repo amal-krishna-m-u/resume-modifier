@@ -61,9 +61,9 @@ Per [spec-03](spec-03-runtime-auth.md). Subscription auth without an API key; ~8
 
 ### 3.3 `CodexCliRunner`
 
-`codex exec --json --skip-git-repo-check <prompt>`, reading stdin from `/dev/null`. Emits newline-delimited JSON events; the reply is the `item.completed` event whose `item.type` is `agent_message`, and `turn.completed` carries `usage`.
+`codex exec --json --skip-git-repo-check --ephemeral -s read-only -`, with the prompt on **stdin** (a corpus-sized prompt would exceed the per-argument limit on Linux). `--ephemeral` keeps Codex from writing a session file per call — every call carries the whole career record. `--ignore-user-config` is deliberately **not** used: it drops the person's model setting and Codex falls back to a default that ChatGPT accounts cannot use. Emits newline-delimited JSON events; the reply is the `item.completed` event whose `item.type` is `agent_message`, and `turn.completed` carries `usage`.
 
-Verified working 2026-10-06: `gpt-5.5`, 272,000-token context, and a strict-JSON prompt returned a bare parseable object with no prose and no code fences.
+Failures arrive as `error` / `turn.failed` events (the API's JSON error is a string inside Codex's own `message`), not necessarily as a non-zero exit; the runner reads them, and classifies login problems as an auth error naming `codex login`. `healthcheck` runs `codex login status`. Verified working 2026-10-06: `gpt-5.5`, 272,000-token context, and a strict-JSON prompt returned a bare parseable object with no prose and no code fences.
 
 ### 3.4 Not recommended
 
@@ -129,9 +129,13 @@ backend = "claude_sdk"          # claude_sdk | claude_cli | codex_cli | openai_c
 base_url = "http://localhost:11434/v1"
 model    = "qwen2.5:14b"
 
+[runtime.backend_models]        # one model per backend; empty = that CLI's own default
+claude_sdk = "opus"
+codex_cli  = "gpt-5.5"
+
 [runtime.models]
 default   = "<backend default>"
 validator = "<strongest available>"   # see §6
 ```
 
-Backend selection never touches agent or pipeline code (AC-R15.1). An auth failure names the backend and the credential it expected (AC-R15.3).
+The Settings screen reads and writes this file (`GET/PUT /api/settings`, `POST /api/settings/test`); `RUNNER_BACKEND` overrides it for one process. Backend selection never touches agent or pipeline code (AC-R15.1). An auth failure names the backend and the credential it expected (AC-R15.3).

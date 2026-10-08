@@ -368,6 +368,10 @@ Export is disabled until the review screen has been opened (AC-R4.3). The whole
 point is that you see what was cut and what is missing before anything leaves
 the machine.
 
+## Choosing Claude or Codex
+
+Open **Settings** in the web interface (or click the backend badge in the header): pick Claude (Agent SDK or CLI), Codex, or an OpenAI-compatible server, set a model per backend if you want one, and **Test connection** before saving. The choice is written to a local, gitignored `resume-tailor.toml` and applies to the next run or message. From a terminal: `RUNNER_BACKEND=codex_cli rt tailor --file jd.txt`.
+
 ## Tests
 
 ```bash

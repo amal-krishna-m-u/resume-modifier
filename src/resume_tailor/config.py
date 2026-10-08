@@ -8,6 +8,7 @@ TOML via the standard library's `tomllib`, so configuration adds no dependency.
 
 from __future__ import annotations
 
+import json
 import os
 import tomllib
 from dataclasses import dataclass, field
@@ -65,6 +66,9 @@ class Config:
     #: One page, with overflow reported rather than cut (OQ-4, resolved
     #: 2026-10-07). Nothing is ever dropped to make a document fit.
     page_budget: int = 1
+    #: One model choice per backend. A single shared `models.default` cannot
+    #: survive switching backends: "opus" means nothing to Codex.
+    backend_models: dict[str, str] = field(default_factory=dict)
     source: Path | None = None
 
     @classmethod
@@ -90,6 +94,10 @@ class Config:
         config.backend = runtime.get("backend", config.backend)
         config.page_budget = int(data.get("render", {}).get("page_budget", config.page_budget))
 
+        config.backend_models = {
+            str(k): str(v) for k, v in (runtime.get("backend_models") or {}).items() if v
+        }
+
         models = runtime.get("models") or {}
         config.models = ModelConfig(**{k: v for k, v in models.items() if hasattr(ModelConfig, k)})
 
@@ -108,3 +116,46 @@ class Config:
         two of them.
         """
         return os.environ.get("RUNNER_BACKEND") or self.backend
+
+    def model_for(self, backend: str) -> str | None:
+        """The model for `backend`; None means that CLI's own default.
+
+        `models.default` predates per-backend choices and is honoured only for
+        the configured backend, so it never leaks a Claude model name to Codex.
+        """
+        return self.backend_models.get(backend) or (
+            self.models.default if backend == self.backend else None
+        )
+
+    def save(self, root: Path) -> Path:
+        """Write the file back. Comments are not preserved; this is the file the
+        Settings screen owns, and it is small enough to regenerate."""
+
+        def q(value: Any) -> str:
+            return json.dumps(value)
+
+        lines = ["# Written by the Settings screen. Safe to edit by hand.", "", "[runtime]"]
+        lines.append(f"backend = {q(self.backend)}")
+        if self.backend_models:
+            lines += ["", "[runtime.backend_models]"]
+            lines += [f"{k} = {q(v)}" for k, v in sorted(self.backend_models.items())]
+        agents = {k: v for k, v in vars(self.models).items() if v}
+        if agents:
+            lines += ["", "[runtime.models]"]
+            lines += [f"{k} = {q(v)}" for k, v in agents.items()]
+        compat = self.openai_compat
+        lines += ["", "[runtime.openai_compat]"]
+        lines += [
+            f"base_url = {q(compat.base_url)}",
+            f"model = {q(compat.model)}",
+            f"api_key_env = {q(compat.api_key_env)}",
+            f"context_tokens = {int(compat.context_tokens)}",
+            f"native_json_schema = {'true' if compat.native_json_schema else 'false'}",
+        ]
+        lines += ["", "[render]", f"page_budget = {int(self.page_budget)}", ""]
+        path = Path(root) / CONFIG_NAME
+        tmp = path.with_suffix(".toml.tmp")
+        tmp.write_text("\n".join(lines), encoding="utf-8")
+        os.replace(tmp, path)
+        self.source = path
+        return path

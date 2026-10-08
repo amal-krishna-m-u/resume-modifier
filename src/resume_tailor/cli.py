@@ -7,6 +7,7 @@ so validating and inspecting them must not require a running server.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import typer
@@ -446,6 +447,10 @@ def serve(
             fg=typer.colors.YELLOW,
         )
 
+    # uvicorn builds the app from an import string, which cannot carry arguments.
+    # Without this the app re-resolved the root from the working directory and
+    # silently served a different project than the one printed above.
+    os.environ["RESUME_TAILOR_ROOT"] = str(base)
     uvicorn.run(
         "resume_tailor.api.app:create_app",
         factory=True,

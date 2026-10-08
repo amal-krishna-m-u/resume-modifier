@@ -43,8 +43,41 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export interface BackendInfo {
+  name: string;
+  label: string;
+  blurb: string;
+  login: string | null;
+  models: string[];
+}
+export interface Settings {
+  backend: string;
+  effective_backend: string;
+  env_override: boolean;
+  models: Record<string, string>;
+  openai_compat: { base_url: string; model: string; api_key_env: string; context_tokens: number };
+  backends: BackendInfo[];
+  file: string | null;
+}
+export interface BackendTest {
+  ok: boolean;
+  detail?: string;
+  credential?: string;
+  login: string | null;
+  window?: number;
+  fits?: boolean;
+}
+
 export const api = {
   health: () => request<Health>("/health"),
+  settings: () => request<Settings>("/settings"),
+  saveSettings: (body: Partial<Pick<Settings, "backend" | "models" | "openai_compat">>) =>
+    request<Settings>("/settings", { method: "PUT", body: JSON.stringify(body) }),
+  testBackend: (backend: string, model?: string) =>
+    request<BackendTest>("/settings/test", {
+      method: "POST",
+      body: JSON.stringify({ backend, model }),
+    }),
   identity: () =>
     request<{ configured: boolean; contact_sets: string[]; default_set?: string }>("/identity"),
 

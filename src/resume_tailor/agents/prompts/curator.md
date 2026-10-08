@@ -35,7 +35,7 @@ Before proposing a new entry, check whether the knowledge base already has one c
 For an update, supply only what changes:
 - `fields`: scalar fields to set
 - `add_tags`: tags to add
-- `add_metrics`: metrics to add
+- `add_metrics`: metrics to add, each an **object** `{"value": "200", "what": "hand-labelled evaluation questions"}` — never a plain string
 - `body_append`: a paragraph to add to the end of the body (preferred — it cannot lose existing text)
 - `body`: a full replacement, only if the person asked you to rewrite it
 

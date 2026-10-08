@@ -5,6 +5,7 @@ import { NewRun } from "./screens/NewRun";
 import { RunScreen } from "./screens/RunScreen";
 import { KbBrowser } from "./screens/KbBrowser";
 import { ApplicationDetail, Tracker } from "./screens/Tracker";
+import { Settings } from "./screens/Settings";
 import { HealthBadge } from "./components/HealthBadge";
 
 type View =
@@ -12,6 +13,7 @@ type View =
   | { name: "run"; id: string }
   | { name: "kb" }
   | { name: "tracker" }
+  | { name: "settings" }
   | { name: "application"; id: string };
 
 /** Hash routing. No router dependency for three screens on one machine. */
@@ -22,6 +24,7 @@ function useRoute(): [View, (view: View) => void] {
     if (hash.startsWith("application/")) return { name: "application", id: hash.slice(12) };
     if (hash === "kb") return { name: "kb" };
     if (hash === "tracker") return { name: "tracker" };
+    if (hash === "settings") return { name: "settings" };
     return { name: "new" };
   };
 
@@ -43,7 +46,9 @@ function useRoute(): [View, (view: View) => void] {
             ? "/kb"
             : next.name === "tracker"
               ? "/tracker"
-              : "/";
+              : next.name === "settings"
+                ? "/settings"
+                : "/";
   };
 
   return [view, navigate];
@@ -94,6 +99,9 @@ export function App() {
             <Tab active={view.name === "kb"} onClick={() => navigate({ name: "kb" })}>
               Knowledge base
             </Tab>
+            <Tab active={view.name === "settings"} onClick={() => navigate({ name: "settings" })}>
+              Settings
+            </Tab>
           </nav>
           <div className="ml-auto flex flex-wrap items-center gap-3">
             {/* A running job stays reachable from every screen. Without this,
@@ -138,7 +146,7 @@ export function App() {
                 ))}
               </select>
             )}
-            <HealthBadge />
+            <HealthBadge onClick={() => navigate({ name: "settings" })} />
           </div>
         </div>
       </header>
@@ -152,6 +160,7 @@ export function App() {
         )}
         {view.name === "run" && <RunScreen runId={view.id} />}
         {view.name === "kb" && <KbBrowser />}
+        {view.name === "settings" && <Settings />}
         {view.name === "tracker" && (
           <Tracker onOpen={(id) => navigate({ name: "application", id })} />
         )}

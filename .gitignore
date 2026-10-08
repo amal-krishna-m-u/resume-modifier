@@ -50,3 +50,6 @@ dist/
 *.tsbuildinfo
 
 .DS_Store
+
+# Local settings written by the Settings screen
+resume-tailor.toml
