@@ -1,0 +1,108 @@
+# Self-hosted Langfuse for resume-tailor tracing and evals (OQ-10).
+#
+# Everything binds to 127.0.0.1 only: traces contain your whole knowledge base,
+# so nothing here is reachable from the network. Do not change the bindings.
+#
+#   cp .env.example .env      # then replace every CHANGE_ME
+#   docker compose up -d
+#   open http://localhost:3000
+#
+# Based on Langfuse's v3 reference compose (web, worker, Postgres, ClickHouse,
+# Redis, MinIO). If a future release changes its required settings, the upstream
+# file is the authority: https://github.com/langfuse/langfuse/blob/main/docker-compose.yml
+# This file has not been run by the author of this repository (no Docker on the
+# development machine); `rt trace status` is the check that it works for you.
+
+x-langfuse-env: &langfuse-env
+  DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD}@postgres:5432/postgres
+  SALT: ${SALT}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY} # openssl rand -hex 32
+  NEXTAUTH_URL: http://localhost:3000
+  NEXTAUTH_SECRET: ${NEXTAUTH_SECRET}
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "true"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  REDIS_AUTH: ${REDIS_AUTH}
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  # Creates the project and API keys on first start, so no sign-up click-through.
+  LANGFUSE_INIT_ORG_ID: resume-tailor
+  LANGFUSE_INIT_ORG_NAME: resume-tailor
+  LANGFUSE_INIT_PROJECT_ID: resume-tailor
+  LANGFUSE_INIT_PROJECT_NAME: resume-tailor
+  LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY}
+  LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY}
+  LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_USER_EMAIL}
+  LANGFUSE_INIT_USER_NAME: owner
+  LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_USER_PASSWORD}
+
+services:
+  langfuse-web:
+    image: docker.io/langfuse/langfuse:3
+    depends_on: [postgres, clickhouse, redis, minio]
+    ports: ["127.0.0.1:3000:3000"]
+    environment: *langfuse-env
+    restart: unless-stopped
+
+  langfuse-worker:
+    image: docker.io/langfuse/langfuse-worker:3
+    depends_on: [postgres, clickhouse, redis, minio]
+    ports: ["127.0.0.1:3030:3030"]
+    environment: *langfuse-env
+    restart: unless-stopped
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+    ports: ["127.0.0.1:8123:8123", "127.0.0.1:9000:9000"]
+    restart: unless-stopped
+
+  minio:
+    image: docker.io/minio/minio
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes: [minio_data:/data]
+    ports: ["127.0.0.1:9090:9000"]
+    restart: unless-stopped
+
+  redis:
+    image: docker.io/redis:7
+    command: --requirepass ${REDIS_AUTH} --maxmemory-policy noeviction
+    ports: ["127.0.0.1:6379:6379"]
+    restart: unless-stopped
+
+  postgres:
+    image: docker.io/postgres:17
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: postgres
+    volumes: [postgres_data:/var/lib/postgresql/data]
+    ports: ["127.0.0.1:5432:5432"]
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  clickhouse_logs:
+  minio_data:

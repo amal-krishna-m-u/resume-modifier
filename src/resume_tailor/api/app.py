@@ -45,6 +45,7 @@ from ..kb.write import (
     write_yaml_file,
 )
 from ..kb.yamlio import load_yaml
+from ..observability import scope as trace_scope
 from ..pipeline import curator
 from ..pipeline.artifacts import Run, guess_role, list_runs, run_slug
 from ..pipeline.orchestrator import Pipeline
@@ -210,6 +211,47 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
                     row["strong"] += 1
         facts.pop("", None)
         return {"runs": counted, "facts": facts}
+
+    @router.get("/observability")
+    async def observability() -> dict[str, Any]:
+        """Tracing status, what the local log says, and past eval results."""
+        from ..evals.runner import results_dir
+        from ..observability import check_self_hosted
+        from ..observability.summary import read_entries, summarise
+        from ..observability.tracing import NotSelfHosted
+
+        obs = context.config.observability
+        refused = None
+        try:
+            check_self_hosted(obs.host)
+        except NotSelfHosted as exc:
+            refused = str(exc)
+        keys = all(os.environ.get(k) for k in (obs.public_key_env, obs.secret_key_env))
+        results = []
+        for path in sorted(results_dir(context.root).glob("*.json"))[-8:]:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            results.append(
+                {
+                    "name": path.stem,
+                    "label": data["label"],
+                    "backend": data["backend"],
+                    "mean": data["mean"],
+                    "reviewed_cases": data["reviewed_cases"],
+                    "prompt_versions": data["prompt_versions"],
+                }
+            )
+        return {
+            "local_log": obs.local_log,
+            "record_content": obs.record_content,
+            "langfuse": {
+                "enabled": obs.langfuse,
+                "host": obs.host,
+                "keys_set": keys,
+                "refused": refused,
+            },
+            "summary": summarise(read_entries(context.root, 7)),
+            "evals": results,
+        }
 
     # -- settings -----------------------------------------------------------
 
@@ -762,15 +804,16 @@ async def _curate(context: Context, scope: str, message: str, focus: dict | None
     store = context.chat_for(scope)
     try:
         history = store.load()[:-1]  # everything before this message
-        turn = await curator.curate(
-            build_backend(context.config),
-            context.corpus(),
-            context.kb_dir,
-            context.config,
-            history,
-            message,
-            focus,
-        )
+        with trace_scope(run_id=f"kb-chat:{scope}", kind="curate"):
+            turn = await curator.curate(
+                build_backend(context.config),
+                context.corpus(),
+                context.kb_dir,
+                context.config,
+                history,
+                message,
+                focus,
+            )
         turns = store.load()
         curator.supersede(turns, turn)
         turns.append(turn)

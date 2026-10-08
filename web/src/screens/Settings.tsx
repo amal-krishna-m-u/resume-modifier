@@ -10,6 +10,84 @@ import type { BackendTest } from "../lib/api";
  * saved, because the failure mode otherwise is choosing Codex, forgetting you
  * are not logged in, and finding out three minutes into a run.
  */
+function Tracing() {
+  const obs = useQuery({ queryKey: ["observability"], queryFn: api.observability });
+  if (!obs.data) return null;
+  const { langfuse, summary, evals } = obs.data;
+  const state = langfuse.refused
+    ? { text: `Refused — ${langfuse.refused}`, tone: "text-red-700 dark:text-red-400" }
+    : !langfuse.enabled
+      ? { text: "Off. Enable it in resume-tailor.toml once a self-hosted Langfuse is running.", tone: "text-stone-500" }
+      : !langfuse.keys_set
+        ? { text: `On for ${langfuse.host}, but the API key environment variables are not set.`, tone: "text-amber-700 dark:text-amber-400" }
+        : { text: `Sending to ${langfuse.host}`, tone: "text-emerald-700 dark:text-emerald-400" };
+
+  return (
+    <div className="space-y-3 border-t border-stone-200 dark:border-stone-800 pt-6">
+      <div>
+        <h2 className="font-semibold">Tracing &amp; evals</h2>
+        <p className="mt-1 text-xs text-stone-500">
+          Every agent call is logged on this machine (<code className="font-mono">traces/</code>
+          {obs.data.record_content ? ", prompts and outputs included" : ", metadata only"}). Langfuse
+          is optional and must be self-hosted — a public address is refused because traces contain
+          your whole knowledge base.
+        </p>
+      </div>
+      <p className={`text-sm ${state.tone}`}>Langfuse: {state.text}</p>
+
+      {summary.length > 0 && (
+        <div className="card overflow-x-auto">
+          <table className="w-full text-xs tabular-nums">
+            <thead className="text-left text-stone-500">
+              <tr>
+                {["agent", "prompt", "backend", "calls", "errors", "avg s", "avg out"].map((h) => (
+                  <th key={h} className="px-3 py-2 font-medium">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map((r) => (
+                <tr key={`${r.agent}${r.prompt_version}${r.backend}`} className="border-t border-stone-100 dark:border-stone-800">
+                  <td className="px-3 py-1.5">{r.agent}</td>
+                  <td className="px-3 py-1.5 font-mono text-stone-500">{r.prompt_version}</td>
+                  <td className="px-3 py-1.5">{r.backend}</td>
+                  <td className="px-3 py-1.5">{r.calls}</td>
+                  <td className="px-3 py-1.5">{r.errors}</td>
+                  <td className="px-3 py-1.5">{r.mean_seconds}</td>
+                  <td className="px-3 py-1.5">{r.mean_output_tokens}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      <div>
+        <h3 className="text-sm font-medium">Eval results</h3>
+        {evals.length === 0 ? (
+          <p className="mt-1 text-xs text-stone-500">
+            None yet. <code className="font-mono">rt eval build &lt;run-id&gt;</code> then{" "}
+            <code className="font-mono">rt eval run --label my-change</code>.
+          </p>
+        ) : (
+          <ul className="mt-1 space-y-1 text-xs">
+            {evals.map((e) => (
+              <li key={e.name} className="flex flex-wrap gap-x-3">
+                <span className="font-medium">{e.label}</span>
+                <span className="text-stone-500">{e.backend}</span>
+                {Object.entries(e.mean).sort().map(([k, v]) => (
+                  <span key={k} className="tabular-nums text-stone-600 dark:text-stone-400">{k} {v}</span>
+                ))}
+                {e.reviewed_cases === 0 && <span className="text-amber-700 dark:text-amber-400">unreviewed cases</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function Settings() {
   const queryClient = useQueryClient();
   const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
@@ -123,7 +201,7 @@ export function Settings() {
                 <div className="mt-3 space-y-3 pl-7">
                   {info.name !== "openai_compat" ? (
                     <div>
-                      <label className="text-xs font-medium text-stone-500">
+                      <label className="block text-xs font-medium text-stone-500">
                         Model{" "}
                         <span className="font-normal">— empty uses that tool&apos;s own default</span>
                       </label>
@@ -220,6 +298,8 @@ export function Settings() {
         A run already in progress keeps the backend it started with; changes apply to the next
         run or message.
       </p>
+
+      <Tracing />
     </div>
   );
 }

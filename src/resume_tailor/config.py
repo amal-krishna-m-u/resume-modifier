@@ -59,6 +59,23 @@ class OpenAICompatConfig:
 
 
 @dataclass
+class ObservabilityConfig:
+    """Tracing (OQ-10). Decided: local log on by default, Langfuse opt-in.
+
+    The local log never leaves the machine, so it needs no consent. Langfuse
+    needs a server the person runs themselves, so it is off until asked for.
+    """
+
+    local_log: bool = True
+    langfuse: bool = False
+    host: str = "http://localhost:3000"
+    public_key_env: str = "LANGFUSE_PUBLIC_KEY"
+    secret_key_env: str = "LANGFUSE_SECRET_KEY"
+    #: Store prompt and output text in traces. Off keeps only metadata.
+    record_content: bool = True
+
+
+@dataclass
 class Config:
     backend: str = DEFAULT_BACKEND
     models: ModelConfig = field(default_factory=ModelConfig)
@@ -69,7 +86,9 @@ class Config:
     #: One model choice per backend. A single shared `models.default` cannot
     #: survive switching backends: "opus" means nothing to Codex.
     backend_models: dict[str, str] = field(default_factory=dict)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     source: Path | None = None
+    root: Path | None = None
 
     @classmethod
     def load(cls, root: Path | None = None) -> Config:
@@ -82,6 +101,7 @@ class Config:
         config = cls()
         if root is None:
             return config
+        config.root = Path(root)
 
         path = Path(root) / CONFIG_NAME
         if not path.is_file():
@@ -104,6 +124,10 @@ class Config:
         compat = runtime.get("openai_compat") or {}
         config.openai_compat = OpenAICompatConfig(
             **{k: v for k, v in compat.items() if hasattr(OpenAICompatConfig, k)}
+        )
+        obs = data.get("observability") or {}
+        config.observability = ObservabilityConfig(
+            **{k: v for k, v in obs.items() if hasattr(ObservabilityConfig, k)}
         )
         config.source = path
         return config
@@ -151,6 +175,17 @@ class Config:
             f"api_key_env = {q(compat.api_key_env)}",
             f"context_tokens = {int(compat.context_tokens)}",
             f"native_json_schema = {'true' if compat.native_json_schema else 'false'}",
+        ]
+        o = self.observability
+        lines += [
+            "",
+            "[observability]",
+            f"local_log = {'true' if o.local_log else 'false'}",
+            f"langfuse = {'true' if o.langfuse else 'false'}",
+            f"host = {q(o.host)}",
+            f"public_key_env = {q(o.public_key_env)}",
+            f"secret_key_env = {q(o.secret_key_env)}",
+            f"record_content = {'true' if o.record_content else 'false'}",
         ]
         lines += ["", "[render]", f"page_budget = {int(self.page_budget)}", ""]
         path = Path(root) / CONFIG_NAME

@@ -53,7 +53,7 @@ Needs a test from an actual Free account before Codex is documented as a free pa
 
 ---
 
-## OQ-10 — Tracing: Langfuse — **DECIDED: yes, self-hosted, after M7**
+## OQ-10 — Tracing: Langfuse — **RESOLVED: built (M8), self-hosted, opt-in**
 
 **Decided:** 2026-10-07. Scheduled as M8, after the archive and tracker.
 
@@ -73,10 +73,29 @@ every employer, date and achievement — so sending them to a hosted endpoint
 would breach that constraint far more comprehensively than the thing the
 constraint was written about.
 
-**Open sub-questions, for when it is built:** whether tracing is opt-in or on
-by default; whether it wraps `RunnerBackend` (one place, backend-agnostic) or
-each backend separately; and whether the eval set lives in the repository, which
-it cannot if the cases are built from real postings and the real corpus.
+**Resolved 2026-10-09 (M8):**
+
+- **Opt-in or default?** Both, split by where the data goes. A local JSONL log
+  (`traces/`, gitignored) is on by default because it never leaves the machine.
+  Langfuse is off until `[observability] langfuse = true`, because it needs a
+  server the person runs.
+- **Where to wrap?** `RunnerBackend`, once (`TracedBackend`), so Claude, Codex
+  and the rest are traced identically. Run and case identity travel in a
+  contextvar, so no agent or pipeline signature changed.
+- **Where do eval cases live?** In `evals/`, gitignored: they are real postings
+  plus the facts a resume drew on. They cannot be committed to a public repo.
+- **Self-hosted is enforced, not requested.** The Langfuse host is checked and
+  anything but loopback, a private address or a LAN/compose name is refused, as
+  is `*.langfuse.com`.
+- **What an eval measures.** Selection (recall of expected facts, forbidden
+  picks, stability against the baseline) and a validator probe: a fabricated
+  bullet is injected into a real draft and the Validator must cut or flag it.
+  Cases built from a run are `reviewed: false` — their scores mean *consistent
+  with that run*, not *correct*, until a person edits and marks them reviewed.
+- **Not verified here:** the Docker compose file in `ops/langfuse/` has not been
+  run (no Docker on the development machine). The exporter is verified against a
+  stub of Langfuse's OTLP endpoint, which proves a generation leaves the
+  process, not that a real server renders it. `rt trace status` is the check.
 
 ---
 

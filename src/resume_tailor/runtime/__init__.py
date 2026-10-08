@@ -73,7 +73,9 @@ BACKEND_INFO: dict[str, dict] = {
 }
 
 
-def build_backend(config: Config | None = None, name: str | None = None) -> RunnerBackend:
+def build_backend(
+    config: Config | None = None, name: str | None = None, *, trace: bool = True
+) -> RunnerBackend:
     """Construct the configured backend.
 
     Imports are deferred per branch so that a missing optional dependency —
@@ -81,6 +83,15 @@ def build_backend(config: Config | None = None, name: str | None = None) -> Runn
     """
     config = config or Config()
     name = name or config.backend_name()
+    backend = _construct(config, name)
+    if trace:
+        from ..observability import wrap
+
+        return wrap(backend, config)
+    return backend
+
+
+def _construct(config: Config, name: str) -> RunnerBackend:
 
     if name == "claude_sdk":
         from .claude_sdk import ClaudeSdkRunner

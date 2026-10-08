@@ -68,7 +68,30 @@ export interface BackendTest {
   fits?: boolean;
 }
 
+export interface Observability {
+  local_log: boolean;
+  record_content: boolean;
+  langfuse: { enabled: boolean; host: string; keys_set: boolean; refused: string | null };
+  summary: {
+    agent: string;
+    prompt_version: string;
+    backend: string;
+    calls: number;
+    errors: number;
+    mean_seconds: number;
+    mean_output_tokens: number;
+  }[];
+  evals: {
+    name: string;
+    label: string;
+    backend: string;
+    mean: Record<string, number>;
+    reviewed_cases: number;
+  }[];
+}
+
 export const api = {
+  observability: () => request<Observability>("/observability"),
   health: () => request<Health>("/health"),
   settings: () => request<Settings>("/settings"),
   saveSettings: (body: Partial<Pick<Settings, "backend" | "models" | "openai_compat">>) =>

@@ -602,3 +602,189 @@ def applications_reindex(root: Path | None = ROOT_OPTION) -> None:
 
 if __name__ == "__main__":
     app()
+
+
+# -- tracing and evals (OQ-10) --------------------------------------------------
+
+eval_app = typer.Typer(no_args_is_help=True, help="Prompt and model evals.")
+app.add_typer(eval_app, name="eval")
+trace_app = typer.Typer(no_args_is_help=True, help="Agent-call tracing.")
+app.add_typer(trace_app, name="trace")
+
+
+@trace_app.command("summary")
+def trace_summary(
+    root: Path | None = ROOT_OPTION,
+    days: int = typer.Option(7, "--days", help="Most recent N log files."),
+) -> None:
+    """Calls, errors, latency and tokens per agent and prompt version."""
+    from .observability.summary import read_entries, summarise
+
+    base, _, _ = _resolve(root)
+    rows = summarise(read_entries(base, days))
+    if not rows:
+        typer.echo("no traces yet — they are written as agents run (traces/*.jsonl)")
+        return
+    typer.echo(
+        f"{'agent':<10} {'prompt':<9} {'backend':<12} {'calls':>5} {'err':>3} "
+        f"{'rep':>3} {'sec':>6} {'out tok':>8} {'prompt tok':>10}"
+    )
+    for r in rows:
+        typer.echo(
+            f"{r['agent']:<10} {r['prompt_version']:<9} {r['backend']:<12} {r['calls']:>5} "
+            f"{r['errors']:>3} {r['repairs']:>3} {r['mean_seconds']:>6} "
+            f"{r['mean_output_tokens']:>8} {r['mean_prompt_tokens']:>10}"
+        )
+
+
+@trace_app.command("status")
+def trace_status(root: Path | None = ROOT_OPTION) -> None:
+    """Where traces go, and whether the Langfuse connection works."""
+    import os
+
+    from .observability.tracing import NotSelfHosted, check_self_hosted
+
+    base, _, _ = _resolve(root)
+    obs = Config.load(base).observability
+    typer.echo(f"local log   {'on' if obs.local_log else 'off'}  ({base / 'traces'})")
+    typer.echo(
+        f"content     {'prompts and outputs recorded' if obs.record_content else 'metadata only'}"
+    )
+    if not obs.langfuse:
+        typer.echo(
+            "langfuse    off  (enable in resume-tailor.toml: [observability] langfuse = true)"
+        )
+        return
+    try:
+        check_self_hosted(obs.host)
+    except NotSelfHosted as exc:
+        typer.secho(f"langfuse    refused — {exc}", fg=typer.colors.RED)
+        raise typer.Exit(1) from exc
+    keys = all(os.environ.get(k) for k in (obs.public_key_env, obs.secret_key_env))
+    typer.echo(f"langfuse    {obs.host}  keys {'set' if keys else 'MISSING'}")
+    if keys:
+        from langfuse import Langfuse
+
+        client = Langfuse(
+            host=obs.host,
+            public_key=os.environ[obs.public_key_env],
+            secret_key=os.environ[obs.secret_key_env],
+        )
+        ok = client.auth_check()
+        typer.secho(
+            "            " + ("connected" if ok else "auth check failed"),
+            fg=typer.colors.GREEN if ok else typer.colors.RED,
+        )
+
+
+@eval_app.command("build")
+def eval_build(
+    run_id: str = typer.Argument(..., help="A finished run to snapshot as a case."),
+    name: str | None = typer.Option(None, "--name"),
+    root: Path | None = ROOT_OPTION,
+) -> None:
+    """Make an eval case from a run. Review the file before trusting its scores."""
+    from .evals import build_case, save_case
+
+    base, _, _ = _resolve(root)
+    run = Run(base / "runs" / run_id)
+    if not run.directory.is_dir():
+        typer.secho(f"no run {run_id}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    path = save_case(base, build_case(run, name))
+    typer.echo(f"wrote {path.relative_to(base)}")
+    typer.secho(
+        "reviewed: false — scores against it measure consistency with that run. Edit\n"
+        "must_include / must_exclude, then set reviewed: true, to measure quality.",
+        fg=typer.colors.YELLOW,
+    )
+
+
+@eval_app.command("list")
+def eval_list(root: Path | None = ROOT_OPTION) -> None:
+    """Cases and past results."""
+    from .evals import load_cases
+    from .evals.runner import results_dir
+
+    base, _, _ = _resolve(root)
+    for case in load_cases(base):
+        typer.echo(
+            f"case    {case.id:<50} {len(case.must_include):>3} expected  "
+            f"{'reviewed' if case.reviewed else 'unreviewed'}"
+        )
+    for path in sorted(results_dir(base).glob("*.json")):
+        typer.echo(f"result  {path.stem}")
+
+
+@eval_app.command("run")
+def eval_run(
+    label: str = typer.Option(
+        "run", "--label", help="Names the result; use the change under test."
+    ),
+    case: list[str] = typer.Option(None, "--case", help="Only these case ids."),
+    probe: bool = typer.Option(True, "--probe/--no-probe", help="Include the validator probe."),
+    backend: str | None = typer.Option(None, "--backend"),
+    root: Path | None = ROOT_OPTION,
+) -> None:
+    """Re-run the cases against the current prompts and model, and score them."""
+    from .evals import load_cases, run_eval
+    from .observability.tracing import build_sinks
+
+    base, kb_dir, _ = _resolve(root)
+    config = Config.load(base)
+    cases = load_cases(base, case or None)
+    if not cases:
+        typer.secho(
+            "no cases — make one with: rt eval build <run-id>", fg=typer.colors.RED, err=True
+        )
+        raise typer.Exit(1)
+    corpus = load_corpus(kb_dir)
+    runner = build_backend(config, backend)
+    sink = next((s for s in build_sinks(config) if hasattr(s, "score")), None)
+    typer.secho(f"{len(cases)} case(s) on {runner.name}", bold=True)
+    result = asyncio.run(
+        run_eval(base, runner, corpus, config, cases, label=label, probe_validator=probe, sink=sink)
+    )
+    for cid, row in result["cases"].items():
+        scores = "  ".join(f"{k}={v}" for k, v in row["scores"].items())
+        typer.echo(f"  {cid[:48]:<48} {scores}")
+        if row["missed"]:
+            typer.echo(f"    missed: {', '.join(row['missed'])}")
+    typer.secho(
+        "mean  " + "  ".join(f"{k}={v}" for k, v in sorted(result["mean"].items())), bold=True
+    )
+    typer.echo(f"prompts {result['prompt_versions']}")
+    typer.echo(f"saved evals/results/{result['file']}")
+    if not result["reviewed_cases"]:
+        typer.secho(
+            "no case is reviewed: read these as consistency, not quality.", fg=typer.colors.YELLOW
+        )
+
+
+@eval_app.command("compare")
+def eval_compare(
+    a: str = typer.Argument(..., help="Result name or part of it."),
+    b: str = typer.Argument(...),
+    root: Path | None = ROOT_OPTION,
+) -> None:
+    """What changed between two results, and which prompt versions differ."""
+    from .evals import compare, load_result
+
+    base, _, _ = _resolve(root)
+    diff = compare(load_result(base, a), load_result(base, b))
+    typer.secho(f"{diff['a']}  →  {diff['b']}", bold=True)
+    for agent, (old, new) in diff["prompt_changes"].items():
+        typer.echo(f"  prompt {agent}: {old} → {new}")
+    if diff["backend_changed"]:
+        typer.echo(f"  backend: {diff['backend_changed'][0]} → {diff['backend_changed'][1]}")
+    if diff["models_changed"]:
+        typer.echo("  models changed")
+    if not (diff["prompt_changes"] or diff["backend_changed"] or diff["models_changed"]):
+        typer.secho(
+            "  nothing differs between them: this is run-to-run noise.", fg=typer.colors.YELLOW
+        )
+    for key in sorted(diff["delta"]):
+        typer.echo(
+            f"  {key:<34} {diff['mean_a'].get(key, '-'):>6} → {diff['mean_b'].get(key, '-'):>6}"
+            f"  ({diff['delta'][key]:+})"
+        )
