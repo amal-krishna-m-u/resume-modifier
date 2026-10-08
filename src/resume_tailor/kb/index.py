@@ -20,7 +20,7 @@ from pathlib import Path
 
 from .loader import Corpus
 
-INDEX_VERSION = 2
+INDEX_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -36,6 +36,11 @@ class IndexRow:
     dates: dict[str, str] | None
     metrics: int
     estimated_tokens: int
+    #: Words of real body text, excluding bootstrap TODO comments. The UI uses
+    #: this to show which entries are too thin to carry a claim — every
+    #: "matched, but not strongly" row in a gap report is a thin body, and
+    #: finding it should not require opening each entry.
+    body_words: int
     path: str
     sha256: str
     mtime: float
@@ -58,6 +63,7 @@ def build_index(corpus: Corpus) -> dict:
                 dates=dates.model_dump(exclude_none=True) if dates else None,
                 metrics=len(entry.meta.metrics),
                 estimated_tokens=entry.estimated_tokens(),
+                body_words=len(entry.body.split("<!--")[0].split()),
                 path=str(entry.path.relative_to(corpus.root)),
                 sha256=entry.sha256,
                 mtime=entry.path.stat().st_mtime,

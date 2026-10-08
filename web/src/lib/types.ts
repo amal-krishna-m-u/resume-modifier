@@ -25,6 +25,7 @@ export interface IndexRow {
   dates: { start: string; end?: string } | null;
   metrics: number;
   estimated_tokens: number;
+  body_words: number;
   path: string;
   sha256: string;
 }
