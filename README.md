@@ -394,6 +394,10 @@ Answers "did prompt v2 select better than v1?" and "is this model as good as tha
 
 **Tracing.** Every agent call (Claude or Codex alike) is recorded in `traces/` on your machine — agent, backend, model, a hash of the agent's prompt, tokens, latency, repairs, errors, and the prompt/output text (set `record_content = false` to keep metadata only). The corpus itself is stored as a hash, never copied. `rt trace summary` and **Settings → Tracing & evals** show calls, errors and cost per agent *per prompt version*.
 
+**Live view.** While a run, a revision or a knowledge-base chat turn is going, the **Agent activity** panel under the progress tracker shows each model call as it happens: which agent, elapsed time, tokens, what it was asked (the knowledge base itself is never repeated), what it is writing right now, and the finished result. It is fed by `GET /api/trace/{run-id}/events` (SSE), and past runs are read back from the local log, so it survives a restart.
+
+**Reasoning is opt-in and backend-dependent.** *Settings → Show model reasoning* asks for it, at the cost of extra tokens and time per call. Codex then reports short reasoning *summaries* (headings, not a full chain of thought). Claude reports thinking summaries only when the model decides a task needs thinking — easy prompts produce none, and the panel says so rather than showing an empty box. `claude_cli` and `openai_compat` show start/finish and tokens but no live text or reasoning.
+
 **Langfuse (optional, self-hosted only).** `ops/langfuse/` has a compose file bound to 127.0.0.1 and a `setup.sh` that generates secrets and an API key pair:
 
 ```bash

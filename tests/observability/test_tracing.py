@@ -123,12 +123,11 @@ def test_the_wrapper_is_transparent_about_the_backend(tmp_path) -> None:
     assert backend.name == inner.name and backend.capabilities is inner.capabilities
 
 
-def test_build_backend_wraps_only_when_a_sink_exists(tmp_path) -> None:
-    on = Config(root=tmp_path)
-    assert isinstance(build_backend(on, "fake"), TracedBackend)
+def test_build_backend_always_wraps_unless_told_not_to(tmp_path) -> None:
+    """The live view needs the wrapper even with every log sink off."""
     off = Config(root=tmp_path, observability=ObservabilityConfig(local_log=False))
-    assert not isinstance(build_backend(off, "fake"), TracedBackend)
-    assert not isinstance(build_backend(on, "fake", trace=False), TracedBackend)
+    assert isinstance(build_backend(off, "fake"), TracedBackend)
+    assert not isinstance(build_backend(off, "fake", trace=False), TracedBackend)
 
 
 async def test_concurrent_agents_both_see_the_run(tmp_path) -> None:
@@ -229,3 +228,117 @@ def test_a_generation_is_exported_to_the_otlp_endpoint() -> None:
 def test_a_public_host_is_refused_before_anything_is_sent() -> None:
     with pytest.raises(NotSelfHosted):
         LangfuseSink("https://cloud.langfuse.com", "pk", "sk")
+
+
+# -- the live view ------------------------------------------------------------------
+
+
+@pytest.fixture
+def published():
+    from resume_tailor.observability import set_publisher
+
+    events: list[tuple[str, str, dict]] = []
+    set_publisher(lambda key, event, data: events.append((key, event, data)))
+    yield events
+    set_publisher(None)
+
+
+async def test_a_call_publishes_start_and_end_to_the_live_view(tmp_path, published) -> None:
+    backend, _ = traced(tmp_path)
+    with scope(run_id="run-9", kind="tailor"):
+        await backend.run_agent(SPEC, "the posting", cache_prefix="CORPUS")
+    kinds = [event for _, event, _ in published]
+    assert kinds[0] == "call_start" and kinds[-1] == "call_end"
+    start, end = published[0][2], published[-1][2]
+    assert start["agent"] == "selector" and start["input"] == "the posting"
+    assert "CORPUS" not in json.dumps(published), "the corpus must never be streamed"
+    assert end["output"] == {"ok": 1} and end["usage"]["input_tokens"] == 100
+    assert start["id"] == end["id"] and published[0][0] == "run-9"
+
+
+async def test_a_failed_call_ends_with_its_error(tmp_path, published) -> None:
+    runner = FakeRunner({}, fail_on={"selector": BackendError("boom")})
+    backend, _ = traced(tmp_path, runner)
+    with scope(run_id="r"), pytest.raises(BackendError):
+        await backend.run_agent(SPEC, "x")
+    assert "boom" in published[-1][2]["error"]
+
+
+async def test_calls_outside_a_run_are_not_published(tmp_path, published) -> None:
+    backend, _ = traced(tmp_path)
+    await backend.run_agent(SPEC, "x")
+    assert published == []
+
+
+async def test_a_dead_listener_cannot_fail_a_call(tmp_path) -> None:
+    from resume_tailor.observability import set_publisher
+
+    def broken(*_):
+        raise RuntimeError("socket closed")
+
+    set_publisher(broken)
+    try:
+        backend, _ = traced(tmp_path)
+        with scope(run_id="r"):
+            result = await backend.run_agent(SPEC, "x")
+        assert result.json == {"ok": 1}
+    finally:
+        set_publisher(None)
+
+
+async def test_reasoning_is_kept_in_the_log_and_the_final_event(tmp_path, published) -> None:
+    class Thinker(FakeRunner):
+        async def run_agent(self, agent, prompt, **kw):
+            from resume_tailor.observability import current_stream
+
+            current_stream().thought("RQ1 matches the ingestion fact")
+            current_stream().thinking_fragment("and RQ2 needs the trading engine")
+            return await super().run_agent(agent, prompt, **kw)
+
+    backend, root = traced(tmp_path, Thinker({"selector": {"ok": 1}}), show_reasoning=True)
+    with scope(run_id="r"):
+        await backend.run_agent(SPEC, "x")
+    assert read_entries(root)[0]["reasoning"] == [
+        "RQ1 matches the ingestion fact",
+        "and RQ2 needs the trading engine",
+    ]
+    assert any(event == "reasoning" for _, event, _ in published)
+
+
+def test_claude_stream_events_become_output_and_thinking() -> None:
+    from resume_tailor.runtime.claude_sdk import ClaudeSdkRunner
+    from resume_tailor.runtime.live import CallStream
+
+    with CallStream("r", "selector") as stream:
+        ClaudeSdkRunner._live(
+            stream, {"type": "content_block_delta", "delta": {"type": "text_delta", "text": '{"a"'}}
+        )
+        ClaudeSdkRunner._live(
+            stream,
+            {"type": "content_block_delta", "delta": {"type": "thinking_delta", "thinking": "hmm"}},
+        )
+        ClaudeSdkRunner._live(stream, {"type": "message_start"})  # ignored
+    stream.close()
+    assert stream.output == '{"a"' and stream.reasoning == ["hmm"]
+
+
+def test_claude_reasoning_uses_the_summarised_thinking_config() -> None:
+    """`max_thinking_tokens` returned no thinking at all in testing; the explicit
+    config with `display: summarized` is what makes the block carry text."""
+    from resume_tailor.runtime.claude_sdk import ClaudeSdkRunner
+    from resume_tailor.runtime.live import CallStream
+
+    runner = ClaudeSdkRunner()
+    assert getattr(runner._options(SPEC), "thinking", None) is None
+    with CallStream("r", "selector", want_reasoning=True):
+        thinking = runner._options(SPEC).thinking
+    assert thinking["type"] == "enabled" and thinking["display"] == "summarized"
+
+
+def test_streamed_and_final_thinking_are_not_both_recorded() -> None:
+    from resume_tailor.runtime.live import CallStream
+
+    stream = CallStream("r", "a")
+    assert not stream.has_thoughts
+    stream.thinking_fragment("working it out")
+    assert stream.has_thoughts

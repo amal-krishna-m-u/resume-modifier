@@ -6,6 +6,7 @@ import { StageTrack } from "../components/StageTrack";
 import { Review } from "./Review";
 import { Chat } from "../components/Chat";
 import { Promote } from "../components/Promote";
+import { LiveTrace } from "../components/LiveTrace";
 
 /** Which stage each on-disk artifact proves finished. */
 const ARTIFACT_STAGE: Record<string, string> = {
@@ -164,6 +165,8 @@ export function RunScreen({ runId }: { runId: string }) {
           )}
         </div>
       ) : null}
+
+      <LiveTrace key={runId} traceKey={runId} defaultOpen={running} onlyWhileActive />
 
       {failure && (
         <div className="rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/40 p-4 text-sm">

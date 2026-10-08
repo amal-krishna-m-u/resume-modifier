@@ -73,6 +73,9 @@ class ObservabilityConfig:
     secret_key_env: str = "LANGFUSE_SECRET_KEY"
     #: Store prompt and output text in traces. Off keeps only metadata.
     record_content: bool = True
+    #: Ask the model to expose its reasoning for the live view. Off by default:
+    #: it spends extra tokens and time on every call.
+    show_reasoning: bool = False
 
 
 @dataclass
@@ -186,6 +189,7 @@ class Config:
             f"public_key_env = {q(o.public_key_env)}",
             f"secret_key_env = {q(o.secret_key_env)}",
             f"record_content = {'true' if o.record_content else 'false'}",
+            f"show_reasoning = {'true' if o.show_reasoning else 'false'}",
         ]
         lines += ["", "[render]", f"page_budget = {int(self.page_budget)}", ""]
         path = Path(root) / CONFIG_NAME

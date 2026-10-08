@@ -132,7 +132,9 @@ async def test_a_validator_that_waves_it_through_scores_zero(kb, tmp_path) -> No
 
 async def test_a_missed_fact_is_named(kb, tmp_path) -> None:
     nothing = {"selected": [], "considered_and_rejected": []}
-    fake = FakeRunner({**REPLIES, "selector": nothing, "recall": {"additions": [], "concurrences": []}})
+    fake = FakeRunner(
+        {**REPLIES, "selector": nothing, "recall": {"additions": [], "concurrences": []}}
+    )
     result = await run(kb, tmp_path, fake)
     assert result["cases"]["c1"]["missed"] == ["acme-pipeline"]
     assert result["cases"]["c1"]["scores"]["recall"] == 0.0

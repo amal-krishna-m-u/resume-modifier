@@ -86,17 +86,51 @@ TOKEN_EXPIRED = "\n".join(
 )
 
 
+class _Stdin:
+    def __init__(self, proc: Proc) -> None:
+        self.proc = proc
+
+    def write(self, data: bytes) -> None:
+        self.proc.stdin_data = data
+
+    async def drain(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+class _Lines:
+    def __init__(self, text: str) -> None:
+        self.lines = [line.encode() + b"\n" for line in text.splitlines()]
+
+    def __aiter__(self):
+        async def gen():
+            for line in self.lines:
+                yield line
+
+        return gen()
+
+    async def read(self) -> bytes:
+        return b"".join(self.lines)
+
+
 class Proc:
-    """Stands in for the subprocess, recording what it was handed."""
+    """Stands in for the subprocess: events stream out, the prompt is recorded."""
 
     def __init__(self, stdout: str = "", stderr: str = "", code: int = 0) -> None:
-        self.stdout, self.stderr, self.returncode = stdout, stderr, code
-        self.stdin: bytes | None = None
+        self.stdin_data: bytes | None = None
+        self.stdin = _Stdin(self)
+        self.stdout = _Lines(stdout)
+        self.stderr = _Lines(stderr)
+        self.returncode = code
         self.killed = False
 
     async def communicate(self, input: bytes | None = None):
-        self.stdin = input
-        return self.stdout.encode(), self.stderr.encode()
+        return b"".join(self.stdout.lines), b"".join(self.stderr.lines)
+
+    async def wait(self) -> int:
+        return self.returncode
 
     def kill(self) -> None:
         self.killed = True
@@ -151,7 +185,7 @@ async def test_the_prompt_goes_on_stdin_not_the_command_line(codex) -> None:
     big = "x" * 400_000
     await CodexCliRunner().run_agent(SPEC, big)
 
-    assert big.encode() in codex["proc"].stdin
+    assert big.encode() in codex["proc"].stdin_data
     assert all(len(arg) < 1000 for arg in codex["argv"]), "the prompt leaked into argv"
     assert codex["argv"][-1] == "-"
 
@@ -174,7 +208,7 @@ async def test_codex_may_not_write(codex) -> None:
 
 async def test_the_system_prompt_is_part_of_the_stdin_payload(codex) -> None:
     await CodexCliRunner().run_agent(SPEC, "THE-USER-TURN")
-    sent = codex["proc"].stdin.decode()
+    sent = codex["proc"].stdin_data.decode()
     assert sent.index("Select facts.") < sent.index("THE-USER-TURN")
 
 
@@ -264,3 +298,34 @@ async def test_health_reports_a_missing_binary(monkeypatch) -> None:
     monkeypatch.setattr(codex_cli.shutil, "which", lambda _name: None)
     report = await CodexCliRunner().healthcheck()
     assert not report.ok and "not installed" in report.detail
+
+
+# ------------------------------------------------------------ live reporting
+
+
+async def test_reasoning_and_output_reach_the_live_stream(codex) -> None:
+    from resume_tailor.runtime.live import CallStream
+
+    reasoning = event(type="item.completed", item={"type": "reasoning", "text": "Weighing RQ1"})
+    codex["queue"].append(Proc(reasoning + "\n" + SUCCESS))
+    with CallStream("run-1", "selector", want_reasoning=True) as stream:
+        await CodexCliRunner().run_agent(SPEC, "hello")
+    assert stream.reasoning == ["Weighing RQ1"]
+    assert '"ok": true' in stream.output
+
+
+async def test_reasoning_summaries_are_requested_only_when_asked_for(codex) -> None:
+    from resume_tailor.runtime.live import CallStream
+
+    await CodexCliRunner().run_agent(SPEC, "hello")
+    assert "model_reasoning_summary=detailed" not in codex["argv"]
+    with CallStream("run-1", "selector", want_reasoning=True):
+        await CodexCliRunner().run_agent(SPEC, "hello")
+    assert "model_reasoning_summary=detailed" in codex["argv"]
+    assert codex["argv"][-1] == "-"
+
+
+async def test_long_event_lines_are_allowed(codex) -> None:
+    """A whole draft arrives as one line; asyncio's default limit is 64 KB."""
+    await CodexCliRunner().run_agent(SPEC, "hello")
+    assert codex["kwargs"]["limit"] >= 1_000_000

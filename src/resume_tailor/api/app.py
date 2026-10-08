@@ -46,6 +46,7 @@ from ..kb.write import (
 )
 from ..kb.yamlio import load_yaml
 from ..observability import scope as trace_scope
+from ..observability import set_publisher
 from ..pipeline import curator
 from ..pipeline.artifacts import Run, guess_role, list_runs, run_slug
 from ..pipeline.orchestrator import Pipeline
@@ -117,6 +118,8 @@ def create_app(root: Path | None = None) -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     app.state.context = context
+    # Agent calls report into this app's hub. One app per process in practice.
+    set_publisher(context.hub.publish_trace)
     errors.install(app)
     app.include_router(_router(context), prefix="/api")
 
@@ -212,6 +215,48 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         facts.pop("", None)
         return {"runs": counted, "facts": facts}
 
+    # -- live trace -----------------------------------------------------------
+    #
+    # `key` is a run id, or `kb-chat:<scope>` for the knowledge-base assistant.
+
+    @router.get("/trace/{key}/events")
+    async def trace_events(key: str) -> StreamingResponse:
+        return StreamingResponse(
+            context.hub.trace(key).subscribe(),
+            media_type="text/event-stream",
+            headers=SSE_HEADERS,
+        )
+
+    @router.get("/trace/{key}")
+    async def trace_history(key: str) -> dict[str, Any]:
+        """Past calls for a run, from the local log (the live stream is not kept
+        across restarts, the log is)."""
+        from ..observability.summary import read_entries
+
+        entries = [e for e in read_entries(context.root) if e.get("run_id") == key]
+        return {
+            "key": key,
+            "recorded": context.config.observability.local_log,
+            "calls": [
+                {
+                    "agent": e["agent"],
+                    "kind": e.get("kind"),
+                    "backend": e["backend"],
+                    "model": e.get("model"),
+                    "prompt_version": e["prompt_version"],
+                    "at": e["at"],
+                    "seconds": e.get("duration_s"),
+                    "usage": e.get("usage") or {},
+                    "repairs": e.get("repairs", 0),
+                    "error": e.get("error"),
+                    "reasoning": e.get("reasoning") or [],
+                    "input": e.get("input"),
+                    "output": e.get("output"),
+                }
+                for e in entries
+            ],
+        }
+
     @router.get("/observability")
     async def observability() -> dict[str, Any]:
         """Tracing status, what the local log says, and past eval results."""
@@ -243,6 +288,7 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         return {
             "local_log": obs.local_log,
             "record_content": obs.record_content,
+            "show_reasoning": obs.show_reasoning,
             "langfuse": {
                 "enabled": obs.langfuse,
                 "host": obs.host,
@@ -300,6 +346,9 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
                     setattr(config.openai_compat, key, str(compat[key]).strip())
             if "context_tokens" in compat:
                 config.openai_compat.context_tokens = max(1000, int(compat["context_tokens"]))
+        observability = payload.get("observability") or {}
+        if "show_reasoning" in observability:
+            config.observability.show_reasoning = bool(observability["show_reasoning"])
         config.backend = backend
         config.save(context.root)
         return _settings_view()
@@ -867,6 +916,7 @@ async def _execute(context: Context, run: Run, posting: str, payload: dict) -> N
     """Run the pipeline, streaming progress to the run's channel."""
     hub = context.hub
     hub.run(run.id).reset()
+    hub.trace(run.id).reset()
     context.active_runs.add(run.id)
 
     def progress(stage: str, status: str, detail: dict) -> None:

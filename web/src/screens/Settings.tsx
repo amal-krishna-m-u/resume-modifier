@@ -33,6 +33,25 @@ function Tracing() {
           your whole knowledge base.
         </p>
       </div>
+      <label className="flex cursor-pointer items-start gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={obs.data.show_reasoning}
+          onChange={async (event) => {
+            await api.saveSettings({ observability: { show_reasoning: event.target.checked } });
+            obs.refetch();
+          }}
+          className="mt-1"
+        />
+        <span>
+          Show model reasoning in the live view
+          <span className="block text-xs text-stone-500">
+            Asks the model to expose its reasoning (Claude thinking tokens, Codex reasoning
+            summaries). Costs extra tokens and time on every call, and not every model produces
+            any — so it is off unless you want it.
+          </span>
+        </span>
+      </label>
       <p className={`text-sm ${state.tone}`}>Langfuse: {state.text}</p>
 
       {summary.length > 0 && (

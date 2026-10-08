@@ -28,6 +28,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from ..runtime.base import AgentResult, AgentSpec, RunnerBackend
+from ..runtime.live import CallStream
 from .context import current_scope
 
 
@@ -136,7 +137,15 @@ class LangfuseSink:
 class TracedBackend:
     """A `RunnerBackend` that records every call, then behaves exactly like it."""
 
-    def __init__(self, inner: RunnerBackend, sinks: list[Any], *, record_content: bool = True):
+    def __init__(
+        self,
+        inner: RunnerBackend,
+        sinks: list[Any],
+        *,
+        record_content: bool = True,
+        show_reasoning: bool = False,
+    ):
+        self.show_reasoning = show_reasoning
         self.inner = inner
         self.sinks = sinks
         self.record_content = record_content
@@ -157,18 +166,46 @@ class TracedBackend:
         started = time.monotonic()
         error: str | None = None
         result: AgentResult | None = None
+        scope = current_scope()
+        stream = CallStream(scope.get("run_id"), agent.name, want_reasoning=self.show_reasoning)
+        stream.publish(
+            "call_start",
+            kind=scope.get("kind"),
+            backend=self.name,
+            model=agent.model,
+            prompt_version=prompt_version(agent.system_prompt),
+            input=prompt[-4000:],
+            input_chars=len(prompt),
+            prefix_chars=len(cache_prefix or ""),
+            at=datetime.now(UTC).isoformat(timespec="seconds"),
+        )
         try:
-            result = await self.inner.run_agent(
-                agent, prompt, cache_prefix=cache_prefix, session_id=session_id
-            )
+            with stream:
+                result = await self.inner.run_agent(
+                    agent, prompt, cache_prefix=cache_prefix, session_id=session_id
+                )
             return result
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
             raise
         finally:
-            self._emit(agent, prompt, cache_prefix, result, error, time.monotonic() - started)
+            stream.close()
+            seconds = time.monotonic() - started
+            stream.publish(
+                "call_end",
+                seconds=round(seconds, 1),
+                usage=vars(result.usage) if result else {},
+                repairs=result.repairs if result else 0,
+                error=error,
+                output=(
+                    result.json
+                    if result and result.json is not None
+                    else (result.raw_text if result else None)
+                ),
+            )
+            self._emit(agent, prompt, cache_prefix, result, error, seconds, stream.reasoning)
 
-    def _emit(self, agent, prompt, prefix, result, error, seconds) -> None:
+    def _emit(self, agent, prompt, prefix, result, error, seconds, reasoning=()) -> None:
         scope = current_scope()
         usage = vars(result.usage) if result else {}
         entry: dict[str, Any] = {
@@ -187,6 +224,8 @@ class TracedBackend:
             "repairs": result.repairs if result else 0,
             "error": error,
         }
+        if reasoning:
+            entry["reasoning"] = list(reasoning)
         if self.record_content:
             entry["input"] = prompt
             entry["output"] = (
@@ -221,7 +260,11 @@ def build_sinks(config) -> list[Any]:
 
 
 def wrap(backend: RunnerBackend, config) -> RunnerBackend:
-    sinks = build_sinks(config)
-    if not sinks:
-        return backend
-    return TracedBackend(backend, sinks, record_content=config.observability.record_content)
+    """Always wrap: the live view needs the wrapper even with every sink off."""
+    obs = config.observability
+    return TracedBackend(
+        backend,
+        build_sinks(config),
+        record_content=obs.record_content,
+        show_reasoning=obs.show_reasoning,
+    )
