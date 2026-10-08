@@ -1,0 +1,225 @@
+import { useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api, RequestFailed } from "../lib/api";
+import type { BackendTest } from "../lib/api";
+
+/** Which model does the work.
+ *
+ * Switching is a setting, not a code change: every agent talks to one
+ * RunnerBackend, so this only decides which. A backend is checked before it is
+ * saved, because the failure mode otherwise is choosing Codex, forgetting you
+ * are not logged in, and finding out three minutes into a run.
+ */
+export function Settings() {
+  const queryClient = useQueryClient();
+  const settings = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  const [backend, setBackend] = useState<string | null>(null);
+  const [models, setModels] = useState<Record<string, string>>({});
+  const [tests, setTests] = useState<Record<string, BackendTest | "checking">>({});
+  const [compat, setCompat] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!settings.data) return;
+    setBackend(settings.data.backend);
+    setModels(settings.data.models);
+    setCompat(
+      Object.fromEntries(
+        Object.entries(settings.data.openai_compat).map(([k, v]) => [k, String(v)]),
+      ),
+    );
+  }, [settings.data]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.saveSettings({
+        backend: backend!,
+        models,
+        openai_compat: {
+          ...compat,
+          context_tokens: Number(compat.context_tokens),
+        } as never,
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings"], data);
+      queryClient.invalidateQueries({ queryKey: ["health"] });
+    },
+  });
+
+  async function check(name: string) {
+    setTests((current) => ({ ...current, [name]: "checking" }));
+    try {
+      const result = await api.testBackend(name, models[name] || undefined);
+      setTests((current) => ({ ...current, [name]: result }));
+    } catch (error) {
+      setTests((current) => ({
+        ...current,
+        [name]: { ok: false, detail: String(error), login: null },
+      }));
+    }
+  }
+
+  if (!settings.data || backend === null) return <p className="text-sm text-stone-500">Loading…</p>;
+  const data = settings.data;
+  const dirty =
+    backend !== data.backend ||
+    JSON.stringify(models) !== JSON.stringify(data.models) ||
+    JSON.stringify(compat) !==
+      JSON.stringify(
+        Object.fromEntries(Object.entries(data.openai_compat).map(([k, v]) => [k, String(v)])),
+      );
+  const failure = save.error instanceof RequestFailed ? save.error : null;
+
+  return (
+    <div className="max-w-3xl space-y-6">
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
+        <p className="mt-1 text-sm text-stone-500">
+          Choose which model runs the five agents, the revisions and the knowledge-base
+          assistant. Saved to <code className="font-mono">{data.file ?? "resume-tailor.toml"}</code>{" "}
+          on this machine only.
+        </p>
+      </div>
+
+      {data.env_override && (
+        <p className="rounded-lg border border-amber-300 dark:border-amber-900 bg-amber-50 dark:bg-amber-950/30 p-3 text-sm text-amber-900 dark:text-amber-300">
+          The server was started with <code className="font-mono">RUNNER_BACKEND</code> set, which
+          overrides this screen — it is currently using{" "}
+          <strong>{data.effective_backend}</strong>. Restart without it for your choice to apply.
+        </p>
+      )}
+
+      <div className="space-y-3">
+        {data.backends.map((info) => {
+          const selected = backend === info.name;
+          const test = tests[info.name];
+          return (
+            <div
+              key={info.name}
+              className={`card p-4 ${selected ? "ring-2 ring-stone-900 dark:ring-stone-100" : ""}`}
+            >
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="radio"
+                  name="backend"
+                  checked={selected}
+                  onChange={() => setBackend(info.name)}
+                  className="mt-1"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="flex flex-wrap items-baseline gap-2">
+                    <span className="font-medium">{info.label}</span>
+                    <code className="text-[11px] text-stone-400">{info.name}</code>
+                    {data.backend === info.name && (
+                      <span className="text-[11px] text-emerald-700 dark:text-emerald-400">
+                        in use
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 block text-xs text-stone-500">{info.blurb}</span>
+                </span>
+              </label>
+
+              {selected && (
+                <div className="mt-3 space-y-3 pl-7">
+                  {info.name !== "openai_compat" ? (
+                    <div>
+                      <label className="text-xs font-medium text-stone-500">
+                        Model{" "}
+                        <span className="font-normal">— empty uses that tool&apos;s own default</span>
+                      </label>
+                      <input
+                        list={`models-${info.name}`}
+                        value={models[info.name] ?? ""}
+                        onChange={(event) =>
+                          setModels({ ...models, [info.name]: event.target.value })
+                        }
+                        placeholder="default"
+                        className="field mt-1 w-full max-w-xs"
+                      />
+                      <datalist id={`models-${info.name}`}>
+                        {info.models.map((m) => (
+                          <option key={m} value={m} />
+                        ))}
+                      </datalist>
+                    </div>
+                  ) : (
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {(
+                        [
+                          ["base_url", "Base URL"],
+                          ["model", "Model"],
+                          ["api_key_env", "API key env var"],
+                          ["context_tokens", "Context window (tokens)"],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <div key={key}>
+                          <label className="text-xs font-medium text-stone-500">{label}</label>
+                          <input
+                            value={compat[key] ?? ""}
+                            onChange={(event) =>
+                              setCompat({ ...compat, [key]: event.target.value })
+                            }
+                            className="field mt-1 w-full"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={() => check(info.name)}
+                      disabled={test === "checking"}
+                      className="btn-secondary text-xs"
+                    >
+                      {test === "checking" ? "Checking…" : "Test connection"}
+                    </button>
+                    {test && test !== "checking" && (
+                      <span
+                        className={`text-xs ${test.ok ? "text-emerald-700 dark:text-emerald-400" : "text-red-700 dark:text-red-400"}`}
+                      >
+                        {test.ok ? "Ready" : "Not ready"}
+                        {test.detail ? ` — ${test.detail}` : ""}
+                        {!test.ok && test.login && (
+                          <>
+                            {" "}
+                            Run <code className="font-mono">{test.login}</code> in a terminal.
+                          </>
+                        )}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => save.mutate()}
+          disabled={!dirty || save.isPending}
+          className="btn-primary"
+        >
+          {save.isPending ? "Saving…" : "Save"}
+        </button>
+        {!dirty && save.isSuccess && (
+          <span className="text-sm text-emerald-700 dark:text-emerald-400">
+            Saved — new runs use it.
+          </span>
+        )}
+        {failure && (
+          <span className="text-sm text-red-700 dark:text-red-400">
+            {failure.message}
+            {failure.remedy ? ` ${failure.remedy}` : ""}
+          </span>
+        )}
+      </div>
+      <p className="text-xs text-stone-500">
+        A run already in progress keeps the backend it started with; changes apply to the next
+        run or message.
+      </p>
+    </div>
+  );
+}

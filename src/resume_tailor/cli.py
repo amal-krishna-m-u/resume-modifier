@@ -7,6 +7,7 @@ so validating and inspecting them must not require a running server.
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
 
 import typer
@@ -21,7 +22,7 @@ from .kb.index import write_index
 from .kb.loader import load_corpus
 from .kb.paths import repo_root
 from .kb.validate import validate_kb
-from .pipeline.artifacts import Run, run_slug
+from .pipeline.artifacts import Run, guess_role, run_slug
 from .pipeline.orchestrator import Pipeline
 from .pipeline.report import render_gap_report
 from .render.compile import (
@@ -310,7 +311,8 @@ def tailor(
         posting = posting or run.read("posting")
         typer.echo(f"resuming {run.id} — done: {', '.join(run.completed_stages()) or 'nothing'}")
     else:
-        run = Run.create(runs_dir, run_slug(_guess_role(posting), company))
+        run = Run.create(runs_dir, run_slug(guess_role(posting), company))
+        run.write("meta", {"company": company} if company else {})
 
     def progress(stage: str, status: str, detail: dict) -> None:
         if status == "running":
@@ -422,20 +424,6 @@ def tailor(
     typer.echo(f"  {(run.directory / 'gap-report.md').relative_to(base)}")
 
 
-def _guess_role(posting: str) -> str:
-    """A slug from the posting's first substantial line.
-
-    Only ever used for a folder name, so a poor guess is cosmetic. The
-    application archive (M7) takes the role from the user explicitly, where
-    getting it right actually matters.
-    """
-    for line in posting.splitlines():
-        line = line.strip()
-        if 3 < len(line) < 80:
-            return line
-    return "posting"
-
-
 @app.command("serve")
 def serve(
     root: Path | None = ROOT_OPTION,
@@ -459,6 +447,10 @@ def serve(
             fg=typer.colors.YELLOW,
         )
 
+    # uvicorn builds the app from an import string, which cannot carry arguments.
+    # Without this the app re-resolved the root from the working directory and
+    # silently served a different project than the one printed above.
+    os.environ["RESUME_TAILOR_ROOT"] = str(base)
     uvicorn.run(
         "resume_tailor.api.app:create_app",
         factory=True,

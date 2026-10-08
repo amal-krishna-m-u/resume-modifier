@@ -21,11 +21,20 @@ from ..kb.write import Conflict, NotFound, StillReferenced, ValidationFailed, Wr
 from ..render.compile import CompileError, TectonicMissing
 from ..runtime.base import BackendAuthError, BackendError, ContextExceeded
 
+
+class RunBusy(WriteError):
+    """The run is mid-revision. Distinct from a failure: it resolves by itself,
+    so a client should wait and retry rather than report an error."""
+
+    code = "run_busy"
+
+
 #: Which HTTP status each refusal maps to. 409 for a conflict so the UI can
 #: offer a comparison rather than a generic failure.
 STATUS = {
     ValidationFailed: 422,
     Conflict: 409,
+    RunBusy: 409,
     NotFound: 404,
     StillReferenced: 409,
     WriteError: 400,

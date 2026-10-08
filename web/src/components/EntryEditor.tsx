@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, RequestFailed } from "../lib/api";
 import { BodyEditor } from "./BodyEditor";
 import { joinTodo, splitTodo } from "../lib/todo";
+import { KbChat } from "./KbChat";
 
 type Metric = { value: string; what: string };
 
@@ -56,6 +57,8 @@ export function EntryEditor({
   onSaved,
   onDeleted,
   onDirtyChange,
+  onOpen,
+  startIn,
 }: {
   type: string;
   id?: string;
@@ -64,6 +67,9 @@ export function EntryEditor({
   onDeleted?: () => void;
   /** So the parent can stop the user navigating away from unsaved edits. */
   onDirtyChange?: (dirty: boolean) => void;
+  /** Open another entry, e.g. from a chat proposal's "View entry". */
+  onOpen?: (type: string, id: string) => void;
+  startIn?: "form" | "raw" | "chat";
 }) {
   const queryClient = useQueryClient();
   const creating = !id;
@@ -81,7 +87,7 @@ export function EntryEditor({
     enabled: !creating,
   });
 
-  const [mode, setMode] = useState<"form" | "raw">("form");
+  const [mode, setMode] = useState<"form" | "raw" | "chat">(startIn ?? "form");
   const [fields, setFields] = useState<Fields | null>(null);
   const [body, setBody] = useState("");
   const [note, setNote] = useState<string | null>(null);
@@ -146,6 +152,22 @@ export function EntryEditor({
     const timer = setTimeout(() => setSavedNote(null), 5000);
     return () => clearTimeout(timer);
   }, [savedNote]);
+
+  // The file can change under an open editor: an accepted chat proposal, or a
+  // text editor. With nothing unsaved there is nothing to lose, so reload from
+  // disk. With unsaved edits, leave them alone — saving will report a conflict
+  // rather than silently overwriting what changed.
+  const [loadedHash, setLoadedHash] = useState<string | null>(null);
+  useEffect(() => {
+    if (entry.data && fields !== null && loadedHash === null) setLoadedHash(entry.data.hash);
+  }, [entry.data, fields, loadedHash]);
+  useEffect(() => {
+    if (!creating && entry.data && loadedHash && entry.data.hash !== loadedHash && !dirty) {
+      setFields(null);
+      setInitial(null);
+      setLoadedHash(null);
+    }
+  }, [creating, entry.data, loadedHash, dirty]);
 
   const terms = useMemo(() => Object.keys(taxonomy.data?.terms ?? {}).sort(), [taxonomy.data]);
   const parents = useMemo(
@@ -220,7 +242,7 @@ export function EntryEditor({
         <h2 className="font-semibold">{creating ? `New ${type}` : id}</h2>
         <div className="ml-auto flex items-center gap-2">
           <div className="flex rounded border border-stone-300 dark:border-stone-700 text-xs overflow-hidden">
-            {(["form", "raw"] as const).map((name) => (
+            {(["form", "raw", "chat"] as const).map((name) => (
               <button
                 key={name}
                 onClick={() => {
@@ -233,7 +255,7 @@ export function EntryEditor({
                   mode === name ? "bg-stone-200 dark:bg-stone-800 font-medium" : ""
                 }`}
               >
-                {name === "form" ? "Form" : "Raw"}
+                {name === "form" ? "Form" : name === "raw" ? "Raw" : "Chat"}
               </button>
             ))}
           </div>
@@ -244,7 +266,7 @@ export function EntryEditor({
           <button
             onClick={() => save.mutate()}
             disabled={save.isPending || !fields.id || !fields.title || (!creating && !dirty)}
-            className="btn-primary"
+            className={`btn-primary ${mode === "chat" && !dirty && !creating ? "hidden" : ""}`}
             title="Save (⌘S)"
           >
             {save.isPending ? "Saving…" : creating ? "Create" : "Save"}
@@ -253,7 +275,38 @@ export function EntryEditor({
         </div>
       </div>
 
-      {mode === "raw" ? (
+      {mode === "chat" ? (
+        <KbChat
+          // One conversation per entry, so "add that this handled 2,000 users"
+          // means something. A brand-new entry has no id yet, so it gets one per type.
+          scope={creating ? `new-${type}` : (id as string)}
+          focus={creating ? { new: type, parent } : { entry: id }}
+          entries={index.data?.entries ?? []}
+          heading={creating ? `Describe the new ${type}` : "Add to this entry by chat"}
+          starters={
+            creating
+              ? [
+                  { label: "Describe it", text: "Here's what I did: " },
+                  { label: "Interview me", text: "Interview me about this — ask whatever you need to record it accurately." },
+                ]
+              : [
+                  { label: "What's missing?", text: "Ask me questions about this entry to find what's missing or too thin." },
+                  { label: "Add more detail", text: "Here is more detail about how I did this: " },
+                  { label: "Add a result", text: "A measurable result I forgot to record: " },
+                ]
+          }
+          // A proposal written while the Form has unsaved edits would collide
+          // with them, and the second save would report a conflict.
+          blockedReason={
+            dirty
+              ? "You have unsaved edits in the Form or Raw tab. Save or discard them first, so this change doesn't collide with them."
+              : null
+          }
+          onOpenEntry={(entryType, entryId) =>
+            creating ? onSaved?.(entryId) : entryId === id ? undefined : onOpen?.(entryType, entryId)
+          }
+        />
+      ) : mode === "raw" ? (
         <textarea
           value={raw ?? composed}
           onChange={(event) => setRaw(event.target.value)}

@@ -5,6 +5,7 @@ import { NewRun } from "./screens/NewRun";
 import { RunScreen } from "./screens/RunScreen";
 import { KbBrowser } from "./screens/KbBrowser";
 import { ApplicationDetail, Tracker } from "./screens/Tracker";
+import { Settings } from "./screens/Settings";
 import { HealthBadge } from "./components/HealthBadge";
 
 type View =
@@ -12,6 +13,7 @@ type View =
   | { name: "run"; id: string }
   | { name: "kb" }
   | { name: "tracker" }
+  | { name: "settings" }
   | { name: "application"; id: string };
 
 /** Hash routing. No router dependency for three screens on one machine. */
@@ -22,6 +24,7 @@ function useRoute(): [View, (view: View) => void] {
     if (hash.startsWith("application/")) return { name: "application", id: hash.slice(12) };
     if (hash === "kb") return { name: "kb" };
     if (hash === "tracker") return { name: "tracker" };
+    if (hash === "settings") return { name: "settings" };
     return { name: "new" };
   };
 
@@ -43,7 +46,9 @@ function useRoute(): [View, (view: View) => void] {
             ? "/kb"
             : next.name === "tracker"
               ? "/tracker"
-              : "/";
+              : next.name === "settings"
+                ? "/settings"
+                : "/";
   };
 
   return [view, navigate];
@@ -94,6 +99,9 @@ export function App() {
             <Tab active={view.name === "kb"} onClick={() => navigate({ name: "kb" })}>
               Knowledge base
             </Tab>
+            <Tab active={view.name === "settings"} onClick={() => navigate({ name: "settings" })}>
+              Settings
+            </Tab>
           </nav>
           <div className="ml-auto flex flex-wrap items-center gap-3">
             {/* A running job stays reachable from every screen. Without this,
@@ -103,7 +111,7 @@ export function App() {
                 key={run.id}
                 onClick={() => navigate({ name: "run", id: run.id })}
                 className="flex items-center gap-2 rounded border border-sky-300 dark:border-sky-800 bg-sky-50 dark:bg-sky-950/40 px-2.5 py-1 text-xs"
-                title={run.id}
+                title={run.title}
               >
                 <span className="size-1.5 rounded-full bg-sky-500 animate-pulse" />
                 <span className="max-w-40 truncate">
@@ -132,12 +140,13 @@ export function App() {
                 {runs.data.runs.map((run) => (
                   <option key={run.id} value={run.id}>
                     {run.running ? "● " : run.complete ? "" : "· "}
-                    {run.id}
+                    {run.title}
+                    {run.company ? ` — ${run.company}` : ""}
                   </option>
                 ))}
               </select>
             )}
-            <HealthBadge />
+            <HealthBadge onClick={() => navigate({ name: "settings" })} />
           </div>
         </div>
       </header>
@@ -151,6 +160,7 @@ export function App() {
         )}
         {view.name === "run" && <RunScreen runId={view.id} />}
         {view.name === "kb" && <KbBrowser />}
+        {view.name === "settings" && <Settings />}
         {view.name === "tracker" && (
           <Tracker onOpen={(id) => navigate({ name: "application", id })} />
         )}

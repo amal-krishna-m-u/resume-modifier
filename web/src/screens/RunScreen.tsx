@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, RequestFailed, watchRun } from "../lib/api";
 import type { StageEvent } from "../lib/types";
 import { StageTrack } from "../components/StageTrack";
@@ -16,18 +16,27 @@ const ARTIFACT_STAGE: Record<string, string> = {
   validation: "validator",
 };
 
+const STAGE_LABEL: Record<string, string> = {
+  analyst: "reading the posting",
+  selector: "selecting facts",
+  recall: "second-pass recall",
+  writer: "rewriting the draft",
+  validator: "re-checking every claim",
+};
+
 export function RunScreen({ runId }: { runId: string }) {
   const queryClient = useQueryClient();
   const [events, setEvents] = useState<Record<string, StageEvent>>({});
   const [failure, setFailure] = useState<{ message: string; resumable: boolean } | null>(null);
   const [showPipeline, setShowPipeline] = useState(false);
+  const [version, setVersion] = useState(0);
 
   const run = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.run(runId),
     // While a run is in flight the artifacts on disk are the ground truth, and
     // they change between SSE frames. Polling stops once it finishes.
-    refetchInterval: (query) => (query.state.data?.running ? 4000 : false),
+    refetchInterval: (query) => (query.state.data?.running ? 2500 : false),
   });
   const identity = useQuery({ queryKey: ["identity"], queryFn: api.identity });
   const kb = useQuery({ queryKey: ["kb", "index"], queryFn: api.kbIndex });
@@ -35,7 +44,7 @@ export function RunScreen({ runId }: { runId: string }) {
   // Seed progress from what is already on disk, so returning to a run shows
   // what happened rather than an empty panel. Token counts come from the run's
   // own usage artifact; where it has none the counts are left out rather than
-  // shown as zero — an earlier version invented "0 in · 0 out" for every stage.
+  // shown as zero.
   useEffect(() => {
     const stages = run.data?.stages ?? [];
     if (stages.length === 0) return;
@@ -70,6 +79,7 @@ export function RunScreen({ runId }: { runId: string }) {
       onDone: () => {
         queryClient.invalidateQueries({ queryKey: ["run", runId] });
         queryClient.invalidateQueries({ queryKey: ["runs"] });
+        queryClient.invalidateQueries({ queryKey: ["chat", runId] });
       },
       onError: (event) => setFailure(event),
     });
@@ -79,10 +89,19 @@ export function RunScreen({ runId }: { runId: string }) {
   // half-finished run and an abandoned one look identical.
   const running = run.data?.running ?? false;
   const complete = run.data?.complete ?? false;
-  // Empty until identity has loaded. The preview and the download buttons
-  // used to fall back to a set called "default", which does not exist for
-  // anyone with named sets — so the first request after every page load was
-  // for a contact set that was not there.
+
+  // A finished run that is running again is a revision. The review stays on
+  // screen through it: it used to be replaced by the pipeline panel for the
+  // whole minute or two, which is when you most want the preview in view.
+  const revising = running && complete;
+
+  // The preview only reloads when the run is quiet. Mid-revision the new draft
+  // exists but has not been re-checked, so the server refuses to render it —
+  // reloading then would show an error instead of the last verified resume.
+  useEffect(() => {
+    if (!running && run.dataUpdatedAt) setVersion(run.dataUpdatedAt);
+  }, [running, run.dataUpdatedAt]);
+
   const contactSets = identity.data?.contact_sets ?? [];
   const identityReady = identity.isSuccess;
 
@@ -95,50 +114,31 @@ export function RunScreen({ runId }: { runId: string }) {
     };
   }, [events]);
 
+  const liveStage = Object.values(events).find((e) => e.status === "running")?.stage;
   const ready = run.data?.requirements && run.data.merged && run.data.draft && run.data.validation;
 
   return (
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4 flex-wrap">
-        <div className="min-w-0">
-          <h1 className="text-xl font-semibold tracking-tight truncate">
-            {run.data?.requirements?.role_title ?? "Tailoring…"}
-          </h1>
-          <p className="text-xs text-stone-500 font-mono mt-0.5 truncate">{runId}</p>
-        </div>
-
-        {complete && identityReady && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <Promote
-              runId={runId}
-              onDone={(id) => {
-                window.location.hash = `/application/${id}`;
-              }}
-            />
-            {contactSets.map((set) => (
-              <a
-                key={set}
-                href={`/api/runs/${runId}/export.pdf?contact_set=${set}`}
-                download
-                className="btn-primary"
-              >
-                {/* The set name only means something when there is more than
-                    one. With a single set it read as "PDF · default", which
-                    looks like a setting rather than a download. */}
-                Download PDF{contactSets.length > 1 && ` · ${set}`}
-              </a>
-            ))}
-            <a href={`/api/runs/${runId}/export.tex`} download className="btn-secondary">
-              .tex
-            </a>
-          </div>
-        )}
+        <Heading
+          runId={runId}
+          title={run.data?.title ?? "Tailoring…"}
+          company={run.data?.company ?? null}
+        />
+        {complete && <Promote runId={runId} onDone={(id) => (window.location.hash = `/application/${id}`)} />}
       </div>
 
-      {/* Full panel while the run is live. Once it is done the five stage bars
-          were ~250px of prime space above the actual content, so they fold
-          into one line that expands on request. */}
-      {running || (!complete && Object.keys(events).length > 0) ? (
+      {/* Full panel while the first run is live. A revision gets one line, so
+          the preview and conversation keep the space. */}
+      {revising ? (
+        <div className="card flex items-center gap-3 px-4 py-2.5 text-sm">
+          <span className="size-2 animate-pulse rounded-full bg-sky-500" />
+          <span className="font-medium">Revising</span>
+          <span className="text-xs text-stone-500">
+            {liveStage ? STAGE_LABEL[liveStage] : "working"}…
+          </span>
+        </div>
+      ) : running || (!complete && Object.keys(events).length > 0) ? (
         <StageTrack events={events} running={running} />
       ) : complete && totals.stages > 0 ? (
         <div className="card">
@@ -178,20 +178,19 @@ export function RunScreen({ runId }: { runId: string }) {
       )}
 
       {ready && run.data && identityReady && (
-        <div>
-          <Review
-            requirements={run.data.requirements!}
-            merged={run.data.merged!}
-            draft={run.data.draft!}
-            validation={run.data.validation!}
-            gaps={run.data.gaps ?? []}
-            runId={runId}
-            contactSets={contactSets}
-            entries={kb.data?.entries ?? []}
-            version={run.dataUpdatedAt}
-            chat={<Chat runId={runId} disabled={running} />}
-          />
-        </div>
+        <Review
+          requirements={run.data.requirements!}
+          merged={run.data.merged!}
+          draft={run.data.draft!}
+          validation={run.data.validation!}
+          gaps={run.data.gaps ?? []}
+          runId={runId}
+          contactSets={contactSets}
+          entries={kb.data?.entries ?? []}
+          version={version}
+          revising={revising}
+          chat={<Chat runId={runId} running={running} />}
+        />
       )}
 
       {running && !complete && (
@@ -213,3 +212,82 @@ export function RunScreen({ runId }: { runId: string }) {
 }
 
 export { RequestFailed };
+
+/** The run's name, with a way to change it.
+ *
+ * What it is *called* and where it lives are different things: the folder name
+ * is permanent (applications refer to it), so renaming sets a display title and
+ * touches nothing else. */
+function Heading({
+  runId,
+  title,
+  company,
+}: {
+  runId: string;
+  title: string;
+  company: string | null;
+}) {
+  const queryClient = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(title);
+
+  const rename = useMutation({
+    mutationFn: (value: string) => api.renameRun(runId, { title: value }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["run", runId] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      setEditing(false);
+    },
+  });
+
+  const date = runId.slice(0, 10);
+  const failure = rename.error instanceof RequestFailed ? rename.error : null;
+
+  return (
+    <div className="min-w-0">
+      {editing ? (
+        <div className="flex items-center gap-2">
+          <input
+            autoFocus
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && draft.trim()) rename.mutate(draft.trim());
+              if (event.key === "Escape") setEditing(false);
+            }}
+            className="field text-lg font-semibold w-[min(32rem,80vw)]"
+          />
+          <button
+            onClick={() => rename.mutate(draft.trim())}
+            disabled={rename.isPending}
+            className="btn-primary"
+          >
+            Save
+          </button>
+          <button onClick={() => setEditing(false)} className="btn-ghost">
+            Cancel
+          </button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 group">
+          <h1 className="text-xl font-semibold tracking-tight truncate">{title}</h1>
+          <button
+            onClick={() => {
+              setDraft(title);
+              setEditing(true);
+            }}
+            className="btn-ghost text-xs opacity-0 group-hover:opacity-100 focus:opacity-100"
+            title="Rename — changes the label, not the folder"
+          >
+            Rename
+          </button>
+        </div>
+      )}
+      <p className="mt-0.5 truncate text-xs text-stone-500">
+        {[company, date].filter(Boolean).join(" · ")}
+        <span className="ml-2 font-mono text-stone-400">{runId}</span>
+      </p>
+      {failure && <p className="text-xs text-red-700 dark:text-red-400">{failure.message}</p>}
+    </div>
+  );
+}

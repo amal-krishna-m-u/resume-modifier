@@ -201,6 +201,8 @@ Each agent is a separate context with its own system prompt, invoked through the
 
 Agents are given **no file-write tools**. They receive content as prompt input and return JSON. All disk writes go through the Python write path, which validates. An agent that could write `kb/` directly would bypass every guarantee in [spec-01](spec-01-knowledge-base.md) §4.
 
+**The curator** is a sixth agent, outside the tailoring pipeline. It maintains the knowledge base from a conversation (AC-R13.2, [spec-04 §6.8](spec-04-api-and-ui.md)) and shares the pipeline's invariants: it reads the full corpus, has no write tools, and *proposes* rather than writes. It is not one of the five because it is not part of a tailoring run, so the "five agents, not ten" budget in §6 is untouched — it runs only when the person is talking to it.
+
 Model assignment: Analyst and Writer benefit from the strongest model; Selector and Recall are comprehension-heavy and also warrant it; Validator is a checking task where a smaller, cheaper model is adequate and arguably better suited. Exact assignment is config, tuned after the spike measures real cost.
 
 ## 6. Cost control

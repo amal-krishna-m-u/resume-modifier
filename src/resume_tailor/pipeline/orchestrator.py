@@ -26,6 +26,7 @@ from ..config import Config
 from ..kb.loader import Corpus
 from ..runtime.base import AgentSpec, RunnerBackend, Usage
 from .artifacts import Run
+from .changes import draft_changes, summarise
 from .corpus import estimate_tokens, render_corpus, render_selected
 from .merge import SelectedFact, Selection, gap_report, merge
 
@@ -226,13 +227,15 @@ class Pipeline:
         run.write("draft", draft)
         return draft
 
-    async def validate(self, run: Run, draft: dict[str, Any], selection: Selection) -> dict:
+    async def validate(
+        self, run: Run, draft: dict[str, Any], selection: Selection, *, force: bool = False
+    ) -> dict:
         """Always runs, including after a chat revision (AC-R5.2).
 
         Chat can never bypass validation, or "just add that I led the team"
         writes an unsupported claim straight into the document.
         """
-        if run.has("validation"):
+        if run.has("validation") and not force:
             self.on_progress("validator", "skipped", {"reason": "already complete"})
             return run.read("validation")
 
@@ -299,6 +302,7 @@ class Pipeline:
         instruction: str,
         *,
         bullets: int = 9,
+        already_recorded: bool = False,
     ) -> RunResult:
         """Re-enter at the Writer with a chat instruction (R5, spec-02 §4).
 
@@ -331,7 +335,12 @@ class Pipeline:
         )
 
         history = run.read("chat") if run.has("chat") else []
-        history.append({"role": "user", "text": instruction})
+        if not already_recorded:
+            # Written before the Writer is called, not after. A revision takes a
+            # minute or two, and until now the person's own message was missing
+            # from the conversation for all of it.
+            history.append({"role": "user", "text": instruction})
+            run.write("chat", history)
 
         previous = run.read("draft")
         prompt = (
@@ -355,11 +364,28 @@ class Pipeline:
         )
         run.write("draft", draft)
 
-        run.path("validation").unlink(missing_ok=True)
-        validation = await self.validate(run, draft, selection)
+        # `force`, not deleting the file. The old code removed validation.json to
+        # make `validate` run again — but "this run is complete" is defined as
+        # "validation.json exists", so for the whole minute or two of every
+        # revision the review screen (preview and chat included) was replaced by
+        # the pipeline panel. The previous validation now stays until the new
+        # one atomically replaces it.
+        validation = await self.validate(run, draft, selection, force=True)
 
+        # What changed is computed from the two drafts, with no model involved;
+        # the model's own account is shown beside it. The account is a claim,
+        # the diff is a fact — and the gap between them is worth seeing.
+        changes = draft_changes(previous, draft)
+        reply = (draft.get("reply") or "").strip() if isinstance(draft, dict) else ""
         history.append(
-            {"role": "assistant", "text": "draft revised", "clean": validation.get("clean")}
+            {
+                "role": "assistant",
+                "text": reply or summarise(changes),
+                "changes": changes,
+                "cuts": validation.get("cuts") or [],
+                "warnings": validation.get("warnings") or [],
+                "clean": validation.get("clean"),
+            }
         )
         run.write("chat", history)
 

@@ -263,6 +263,7 @@ career record, and nothing else in the design prevents it.
 | `kb/` | The career record, and `identity.yaml`'s contact details |
 | `applications/` | Complete resumes, job descriptions, third-party referrer names |
 | `runs/` | Disposable tailoring output; reproducible from `kb/` |
+| `chats/` | Your knowledge-base conversations — your career in your own words |
 | `evidence/` | Certificates and letters |
 | `*.pdf`, `*.docx` | Source resumes dropped in for bootstrapping |
 
@@ -328,6 +329,29 @@ no record, because it is confidently wrong.
 lives in `applications/`, company-first, and is gitignored: it holds complete
 resumes, job descriptions and third-party referrer names.
 
+## Updating your knowledge base
+
+Three ways, and all three write through the same validated path:
+
+| Mode | Use it for |
+|---|---|
+| **Form** | A structured editor: tag chips with alias search, depth and visibility with explanations, metric rows |
+| **Raw** | The file itself, for anything the form cannot express |
+| **Chat** | Describe what you did in your own words; the assistant proposes the entry |
+
+Chat is a third tab beside Form and Raw in every entry, and **Add by chat** covers things that aren't about one entry (a new job, say). It never writes anything. Each proposal is shown as exactly what would change — a new entry in full, or for an update only the part that differs — with its validation result visible before you decide. **Nothing is saved until you accept**, and accepting lands as a commit in your local `kb/` repository, so it can be reverted.
+
+The assistant records only what you tell it. It asks when it needs a number or a date rather than guessing, defaults `depth` to `working` rather than flattering you, and prefers adding to an existing entry over creating a near-duplicate. It cannot delete.
+
+## The run screen
+
+The compiled resume stays on screen while you work. **Revise** (chat), **Sources**, **Matches** and **Gaps** sit beside it.
+
+- **Direct / Referral** only switches which version you are looking at, in place. Nothing downloads until you press **Download PDF** or **.tex**.
+- **PDF | LaTeX** shows either one inline; the LaTeX has a copy button for pasting into Overleaf.
+- Revising keeps the last verified PDF in view and disables downloads until the new draft's claims have been re-checked.
+- Each answer shows what actually changed — a diff computed from the two drafts, beside the model's own account and any claims the validator cut.
+
 ## The web interface
 
 ```bash
@@ -343,6 +367,10 @@ process.
 Export is disabled until the review screen has been opened (AC-R4.3). The whole
 point is that you see what was cut and what is missing before anything leaves
 the machine.
+
+## Choosing Claude or Codex
+
+Open **Settings** in the web interface (or click the backend badge in the header): pick Claude (Agent SDK or CLI), Codex, or an OpenAI-compatible server, set a model per backend if you want one, and **Test connection** before saving. The choice is written to a local, gitignored `resume-tailor.toml` and applies to the next run or message. From a terminal: `RUNNER_BACKEND=codex_cli rt tailor --file jd.txt`.
 
 ## Tests
 

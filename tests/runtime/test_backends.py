@@ -228,3 +228,22 @@ async def test_sdk_round_trip_on_the_real_backend() -> None:
     result = await ClaudeSdkRunner().run_agent(spec, 'Reply with exactly this JSON: {"ok": true}')
     assert result.json == {"ok": True}
     assert result.usage.input_tokens > 0
+
+
+@pytest.mark.live
+@pytest.mark.parametrize("name", ["claude_sdk", "claude_cli", "codex_cli"])
+async def test_every_supported_backend_returns_json(name: str) -> None:
+    """The bare minimum for a backend to be supported: a logged-in session, a
+    strict-JSON reply, and usage reported. Run with `pytest -m live`."""
+    from resume_tailor.config import Config
+    from resume_tailor.runtime import build_backend
+
+    os.environ.pop("ANTHROPIC_API_KEY", None)
+    runner = build_backend(Config(), name)
+    assert (await runner.healthcheck()).ok
+    spec = AgentSpec(
+        name="probe", system_prompt="You reply with JSON only. No prose, no code fences."
+    )
+    result = await runner.run_agent(spec, 'Reply with exactly this JSON: {"ok": true}')
+    assert result.json == {"ok": True}
+    assert result.usage.input_tokens > 0

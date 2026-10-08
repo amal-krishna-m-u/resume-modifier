@@ -12,7 +12,9 @@ LAN would hand both to anyone on the network.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
@@ -43,14 +45,15 @@ from ..kb.write import (
     write_yaml_file,
 )
 from ..kb.yamlio import load_yaml
-from ..pipeline.artifacts import Run, list_runs, run_slug
+from ..pipeline import curator
+from ..pipeline.artifacts import Run, guess_role, list_runs, run_slug
 from ..pipeline.orchestrator import Pipeline
 from ..pipeline.report import render_gap_report
 from ..render.compile import compile_pdf
 from ..render.compile import healthcheck as render_health
 from ..render.document import apply_validation, document_from_draft
 from ..render.latex import Geometry, render_document
-from ..runtime import build_backend
+from ..runtime import BACKEND_INFO, build_backend
 from . import errors
 from .events import Hub, KbWatcher
 
@@ -73,12 +76,28 @@ class Context:
         #: and an abandoned one look identical, so liveness has to be held
         #: in the process that owns the task.
         self.active_runs: set[str] = set()
+        #: The knowledge-base chat lives on disk (so it survives a restart and a
+        #: page change) but "the assistant is thinking" can only be held by the
+        #: process that owns the task.
+        self.chats_dir = self.root / "chats"
+        self.chat_running: set[str] = set()
+
+    def chat_for(self, scope: str) -> curator.ChatStore:
+        try:
+            return curator.ChatStore(self.chats_dir, scope)
+        except ValueError as exc:
+            raise WriteError(
+                str(exc),
+                remedy="A scope is an entry id (lowercase letters, digits, hyphens) or `kb`.",
+            ) from exc
 
     def corpus(self):
         return load_corpus(self.kb_dir)
 
 
 def create_app(root: Path | None = None) -> FastAPI:
+    if root is None and os.environ.get("RESUME_TAILOR_ROOT"):
+        root = Path(os.environ["RESUME_TAILOR_ROOT"])
     context = Context(root)
 
     @asynccontextmanager
@@ -191,6 +210,136 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
                     row["strong"] += 1
         facts.pop("", None)
         return {"runs": counted, "facts": facts}
+
+    # -- settings -----------------------------------------------------------
+
+    def _settings_view() -> dict[str, Any]:
+        config = context.config
+        override = os.environ.get("RUNNER_BACKEND")
+        return {
+            "backend": config.backend,
+            "effective_backend": config.backend_name(),
+            "env_override": bool(override),
+            "models": {name: config.backend_models.get(name, "") for name in BACKEND_INFO},
+            "openai_compat": vars(config.openai_compat),
+            "backends": [{"name": name, **info} for name, info in BACKEND_INFO.items()],
+            "file": str(config.source.name) if config.source else None,
+        }
+
+    @router.get("/settings")
+    async def settings_get() -> dict[str, Any]:
+        return _settings_view()
+
+    @router.put("/settings")
+    async def settings_put(payload: dict = Body(...)) -> dict[str, Any]:
+        config = context.config
+        backend = payload.get("backend", config.backend)
+        if backend not in BACKEND_INFO:
+            raise WriteError(
+                f"unknown backend {backend!r}",
+                remedy=f"Choose one of: {', '.join(BACKEND_INFO)}.",
+            )
+        if context.active_runs or context.chat_running:
+            raise errors.RunBusy(
+                "a run or conversation is in progress",
+                remedy="Change the backend once it finishes — mid-run it would not apply anyway.",
+            )
+        models = payload.get("models")
+        if models is not None:
+            config.backend_models = {
+                k: str(v).strip()
+                for k, v in models.items()
+                if k in BACKEND_INFO and str(v or "").strip()
+            }
+        compat = payload.get("openai_compat")
+        if compat:
+            for key in ("base_url", "model", "api_key_env"):
+                if key in compat:
+                    setattr(config.openai_compat, key, str(compat[key]).strip())
+            if "context_tokens" in compat:
+                config.openai_compat.context_tokens = max(1000, int(compat["context_tokens"]))
+        config.backend = backend
+        config.save(context.root)
+        return _settings_view()
+
+    @router.post("/settings/test")
+    async def settings_test(payload: dict = Body(...)) -> dict[str, Any]:
+        """Check a backend without saving it: binary present, logged in, window."""
+        name = payload.get("backend")
+        if name not in BACKEND_INFO:
+            raise WriteError(f"unknown backend {name!r}", remedy="Pick one from the list.")
+        trial = copy.deepcopy(context.config)
+        trial.backend = name
+        if payload.get("model"):
+            trial.backend_models[name] = str(payload["model"]).strip()
+        try:
+            runner = build_backend(trial, name)
+            report = await runner.healthcheck()
+        except Exception as exc:  # noqa: BLE001 — a probe reports, it does not raise
+            return {"ok": False, "detail": str(exc), "login": BACKEND_INFO[name]["login"]}
+        tokens = context.corpus().estimated_tokens()
+        fits, detail = True, report.detail
+        try:
+            runner.capabilities.assert_corpus_fits(name, tokens)
+        except Exception as exc:  # noqa: BLE001
+            fits, detail = False, str(exc)
+        return {
+            "ok": report.ok and fits,
+            "detail": detail,
+            "credential": report.credential,
+            "login": BACKEND_INFO[name]["login"],
+            "window": runner.capabilities.min_context_tokens,
+            "fits": fits,
+        }
+
+    # -- knowledge-base chat (AC-R13.2, spec-04 §6.8) ---------------------------
+
+    @router.get("/kb/chat")
+    async def kb_chat_history(scope: str = Query(curator.GLOBAL_SCOPE)) -> dict[str, Any]:
+        store = context.chat_for(scope)
+        return {"turns": store.load(), "running": scope in context.chat_running, "scope": scope}
+
+    @router.post("/kb/chat")
+    async def kb_chat_send(payload: dict = Body(...)) -> dict[str, Any]:
+        scope = payload.get("scope") or curator.GLOBAL_SCOPE
+        store = context.chat_for(scope)
+        message = (payload.get("message") or "").strip()
+        if not message:
+            raise WriteError(
+                "no message", remedy="Tell the assistant what you did or what to change."
+            )
+        if scope in context.chat_running:
+            raise WriteError(
+                "the assistant is still working on your last message",
+                remedy="Wait for it to finish — it will appear in the conversation.",
+            )
+
+        # The person's turn is written immediately, so it is on screen while the
+        # assistant works and survives navigating away.
+        store.append({"role": "user", "at": curator.now(), "text": message})
+        context.chat_running.add(scope)
+        asyncio.create_task(_curate(context, scope, message, payload.get("focus")))
+        return {"running": True}
+
+    @router.post("/kb/chat/proposals/{proposal_id}/accept")
+    async def kb_chat_accept(
+        proposal_id: str, scope: str = Query(curator.GLOBAL_SCOPE)
+    ) -> dict[str, Any]:
+        proposal = curator.accept(
+            context.kb_dir, context.chat_for(scope), proposal_id, cache_dir=context.cache_dir
+        )
+        return {"proposal": proposal}
+
+    @router.post("/kb/chat/proposals/{proposal_id}/reject")
+    async def kb_chat_reject(
+        proposal_id: str, scope: str = Query(curator.GLOBAL_SCOPE)
+    ) -> dict[str, Any]:
+        return {"proposal": curator.reject(context.chat_for(scope), proposal_id)}
+
+    @router.delete("/kb/chat")
+    async def kb_chat_reset(scope: str = Query(curator.GLOBAL_SCOPE)) -> dict[str, Any]:
+        archived = context.chat_for(scope).archive()
+        return {"archived": archived.name if archived else None}
 
     @router.get("/kb/validate")
     async def kb_validate() -> dict[str, Any]:
@@ -305,6 +454,8 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
             "runs": [
                 {
                     "id": run.id,
+                    "title": run.title(),
+                    "company": run.company(),
                     "stages": run.completed_stages(),
                     "running": run.id in context.active_runs,
                     "complete": run.has("validation"),
@@ -318,11 +469,37 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         run = _run_or_404(context, run_id)
         return {
             "id": run.id,
+            "title": run.title(),
+            "company": run.company(),
             "stages": run.completed_stages(),
             "running": run.id in context.active_runs,
             "complete": run.has("validation"),
             **{stage: run.read(stage) for stage in run.completed_stages()},
         }
+
+    @router.patch("/runs/{run_id}")
+    async def runs_rename(run_id: str, payload: dict = Body(...)) -> dict[str, Any]:
+        """Change what a run is *called*, never where it lives.
+
+        The folder name is permanent — applications and snapshots refer to it —
+        so this sets a display title in `meta.json` instead of renaming anything.
+        """
+        run = _run_or_404(context, run_id)
+        meta = dict(run.meta())
+        for key in ("title", "company"):
+            if key in payload:
+                value = payload[key]
+                if value is not None and not isinstance(value, str):
+                    raise WriteError(f"{key} must be text", remedy="Send a string.")
+                value = (value or "").strip()
+                if len(value) > 120:
+                    raise WriteError(f"{key} is too long", remedy="Keep it under 120 characters.")
+                if value:
+                    meta[key] = value
+                else:
+                    meta.pop(key, None)  # clearing falls back to the computed title
+        run.write("meta", meta)
+        return {"id": run.id, "title": run.title(), "company": run.company()}
 
     @router.get("/runs/{run_id}/events")
     async def runs_events(run_id: str) -> StreamingResponse:
@@ -341,8 +518,14 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
                 remedy="Paste the posting, or fetch a URL and confirm the extracted text first.",
             )
 
-        run = Run.create(context.runs_dir, run_slug(payload.get("role"), payload.get("company")))
+        company = (payload.get("company") or "").strip() or None
+        # The web form sends only the posting and an optional company, so with no
+        # role supplied every run was folder-named "…-untitled". The posting
+        # opens with the job title far more often than not.
+        role = (payload.get("role") or "").strip() or guess_role(posting)
+        run = Run.create(context.runs_dir, run_slug(role, company))
         run.write("posting", posting)
+        run.write("meta", {"company": company} if company else {})
 
         # Returns immediately; progress arrives on the SSE channel. A tailoring
         # run takes minutes, which is far longer than any sensible HTTP
@@ -361,7 +544,23 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
         message = (payload.get("message") or "").strip()
         if not message:
             raise WriteError("no message", remedy="Say what you want changed.")
+        if run.id in context.active_runs:
+            raise errors.RunBusy(
+                "this run is already being revised",
+                remedy="Wait for it to finish — the answer will appear in the conversation.",
+            )
 
+        # Recorded here, synchronously, rather than inside the task: the page
+        # refetches the moment this returns, and the person's own message must
+        # already be there.
+        history = run.read("chat") if run.has("chat") else []
+        history.append({"role": "user", "text": message})
+        run.write("chat", history)
+
+        # Marked busy here, not only inside the task: the page refetches the
+        # instant this returns, and would otherwise see "not running" for the
+        # split second before the task body starts.
+        context.active_runs.add(run.id)
         asyncio.create_task(_revise(context, run, message))
         return {"run_id": run.id, "events": f"/api/runs/{run.id}/events"}
 
@@ -554,6 +753,43 @@ def _written(result) -> dict[str, Any]:
     }
 
 
+async def _curate(context: Context, scope: str, message: str, focus: dict | None) -> None:
+    """One curator turn, written to the conversation file when it finishes.
+
+    Failures become a turn too — an `error` the page can show — rather than
+    vanishing into a log: the person is watching a box that says "thinking".
+    """
+    store = context.chat_for(scope)
+    try:
+        history = store.load()[:-1]  # everything before this message
+        turn = await curator.curate(
+            build_backend(context.config),
+            context.corpus(),
+            context.kb_dir,
+            context.config,
+            history,
+            message,
+            focus,
+        )
+        turns = store.load()
+        curator.supersede(turns, turn)
+        turns.append(turn)
+        store.save(turns)
+    except Exception as exc:
+        store.append(
+            {
+                "role": "assistant",
+                "at": curator.now(),
+                "text": "",
+                "error": str(exc),
+                "questions": [],
+                "proposals": [],
+            }
+        )
+    finally:
+        context.chat_running.discard(scope)
+
+
 def _download_name(run_id: str, path: Path) -> str:
     """A filename that means something in a Downloads folder.
 
@@ -641,7 +877,7 @@ async def _revise(context: Context, run: Run, message: str) -> None:
         pipeline = Pipeline(
             build_backend(context.config), context.corpus(), context.config, on_progress=progress
         )
-        result = await pipeline.revise(run, message)
+        result = await pipeline.revise(run, message, already_recorded=True)
         (run.directory / "gap-report.md").write_text(
             render_gap_report(
                 result.requirements, result.selection, result.gaps, result.validation
@@ -661,6 +897,19 @@ def _export(context: Context, run_id: str, contact_set: str | None, *, compile_t
     from ..kb.identity import load_identity
 
     run = _run_or_404(context, run_id)
+    if run_id in context.active_runs:
+        # Between the Writer finishing and the Validator finishing, draft.json is
+        # the NEW draft and validation.json is still the OLD one. Exporting then
+        # would apply old cuts to new text and could hand over a draft whose
+        # claims have not been checked — the one thing the validator exists to
+        # prevent. So nothing is exported until the revision is done.
+        raise errors.RunBusy(
+            "this run is being revised",
+            remedy=(
+                "The download is available again as soon as the revision finishes "
+                "and its claims are re-checked."
+            ),
+        )
     if not run.has("draft"):
         raise NotFound(
             f"run {run_id} has no draft yet",

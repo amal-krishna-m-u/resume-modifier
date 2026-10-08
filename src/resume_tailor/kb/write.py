@@ -238,6 +238,71 @@ def _validate_candidate(
         )
 
 
+def dry_run(
+    kb_dir: Path,
+    entry_type: str,
+    entry_id: str,
+    text: str,
+    overlay: tuple[tuple[str, str, str], ...] = (),
+) -> dict[str, list[dict]]:
+    """Validate a candidate **without writing**, reporting warnings too.
+
+    A proposal is shown to the user before anything is written, so it needs the
+    whole picture up front: the errors that will block it, and the warnings
+    (an unknown tag, say) that will not. `_validate_candidate` raises on the
+    first kind and never sees the second, which is why this exists separately.
+    """
+    kb_dir = kb_dir.resolve()
+
+    def issue(code: str, message: str, field: str | None = None, entry: str | None = None) -> dict:
+        return {"code": code, "field": field, "message": message, "entry": entry}
+
+    try:
+        path = entry_path(kb_dir, entry_type, entry_id)
+    except (PathEscape, ValueError) as exc:
+        return {"errors": [issue("id", str(exc), "id")], "warnings": []}
+
+    try:
+        candidate = parse_entry(path, text)
+    except ParseError as exc:
+        return {"errors": [issue("parse", exc.message)], "warnings": []}
+
+    errors: list[dict] = []
+    if candidate.meta.type != entry_type:
+        errors.append(
+            issue("type", f"type is {candidate.meta.type!r}, expected {entry_type!r}", "type")
+        )
+    if candidate.meta.id != entry_id:
+        errors.append(issue("id", f"id is {candidate.meta.id!r}, expected {entry_id!r}", "id"))
+
+    corpus = load_corpus(kb_dir)
+
+    # `overlay` is the earlier proposals from the same message, assumed
+    # accepted. Without it a fact proposed under a role proposed in the same
+    # breath would always report "parent does not exist".
+    pending = []
+    for o_type, o_id, o_text in overlay:
+        try:
+            pending.append(parse_entry(entry_path(kb_dir, o_type, o_id), o_text))
+        except (ParseError, PathEscape, ValueError):
+            continue
+    replaced = {e.path for e in pending} | {path}
+    corpus.entries = [e for e in corpus.entries if e.path not in replaced] + pending + [candidate]
+    report = validate_corpus(corpus)
+
+    errors += [
+        issue(i.code, i.message, i.field, i.entry_id)
+        for i in report.errors
+        if i.entry_id in (entry_id, None)
+    ]
+    warnings = [
+        issue(i.code, i.message, i.field, i.entry_id)
+        for i in report.warnings
+        if i.entry_id == entry_id
+    ]
+    return {"errors": errors, "warnings": warnings}
+
+
 def delete_entry(
     kb_dir: Path, entry_type: str, entry_id: str, *, cache_dir: Path | None = None
 ) -> str | None:
