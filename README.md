@@ -423,6 +423,10 @@ rt eval compare baseline tighter-selector # which prompt versions differ, and th
 
 Scores per case: `recall` (expected facts found), `exclusions` (picks you marked wrong), `stability` (agreement with the baseline run), and `validator_catches_fabrication` — a made-up bullet is injected into a real draft and the Validator must cut or flag it. **A case built from a run is `reviewed: false`: its scores mean "consistent with that run", not "correct", until you correct the file.** `compare` says when nothing differs between two results, so run-to-run noise isn't mistaken for improvement. Cases and results live in `evals/` (gitignored: they contain real postings).
 
+## Future scope
+
+Not built yet, on purpose: API-key providers as first-class backends (Anthropic, Vertex, Bedrock, OpenAI, Gemini; no CLI), and hosting (auth, HTTPS, persistent storage). What exists today, what is missing and why it waits: [docs/future-scope.md](docs/future-scope.md).
+
 ## Next step
 
 Review your first eval cases (`rt eval build`, then correct `must_include`) and use
