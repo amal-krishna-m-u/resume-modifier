@@ -24,6 +24,7 @@ from typing import Any
 from ..agents.specs import build_all
 from ..config import Config
 from ..kb.loader import Corpus
+from ..observability import scope
 from ..runtime.base import AgentSpec, RunnerBackend, Usage
 from .artifacts import Run
 from .changes import draft_changes, summarise
@@ -62,7 +63,9 @@ class Pipeline:
         config: Config | None = None,
         *,
         on_progress: Progress | None = None,
+        trace_extra: dict[str, Any] | None = None,
     ) -> None:
+        self.trace_extra = trace_extra or {}
         self.backend = backend
         self.corpus = corpus
         self.config = config or Config()
@@ -70,6 +73,8 @@ class Pipeline:
         self.on_progress = on_progress or _noop
         self.usage = Usage()
         self.per_agent: dict[str, Usage] = {}
+        #: Which run and what kind of work, for the trace (OQ-10).
+        self.trace: dict[str, Any] = {}
 
     # -- plumbing ----------------------------------------------------------
 
@@ -77,7 +82,8 @@ class Pipeline:
         spec: AgentSpec = self.agents[name]
         self.on_progress(name, "running", {})
 
-        result = await self.backend.run_agent(spec, prompt, cache_prefix=cache_prefix)
+        with scope(**self.trace):
+            result = await self.backend.run_agent(spec, prompt, cache_prefix=cache_prefix)
 
         self.usage = self.usage + result.usage
         self.per_agent[name] = result.usage
@@ -263,6 +269,7 @@ class Pipeline:
         concurrent: bool = True,
     ) -> RunResult:
         self.check_context()
+        self.trace = {"run_id": run.id, "kind": "tailor", **self.trace_extra}
         if not run.has("posting"):
             run.write("posting", posting)
 
@@ -315,6 +322,7 @@ class Pipeline:
         and the cue to add the fact to the knowledge base rather than to the
         resume.
         """
+        self.trace = {"run_id": run.id, "kind": "revise", **self.trace_extra}
         requirements = run.read("requirements")
         merged = run.read("merged")
         selection = Selection(

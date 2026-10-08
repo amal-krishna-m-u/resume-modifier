@@ -53,3 +53,10 @@ dist/
 
 # Local settings written by the Settings screen
 resume-tailor.toml
+
+# Traces and eval cases hold prompts, outputs and real postings (the career record)
+/traces/
+/evals/
+
+# Langfuse secrets
+ops/langfuse/.env

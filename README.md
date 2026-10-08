@@ -303,7 +303,7 @@ source of truth — it is all reproducible from `kb/` plus the posting.
 | M5 | FastAPI write path and SSE | **done** |
 | M6 | React UI | **done** |
 | M7 | Application archive and tracker | **done** |
-| M8 | Self-hosted Langfuse tracing and prompt evals ([OQ-10](docs/open-questions.md)) | next |
+| M8 | Tracing and prompt evals; self-hosted Langfuse optional ([OQ-10](docs/open-questions.md)) | done |
 
 ## After you apply
 
@@ -388,9 +388,38 @@ python3 docs/validate_docs.py
 
 Stdlib only. Fails on untraced requirements, acceptance criteria without Given/When/Then, specs covering undefined requirements, orphaned criteria, missing source quotes, and dead links.
 
+## Tracing and evals
+
+Answers "did prompt v2 select better than v1?" and "is this model as good as that one?".
+
+**Tracing.** Every agent call (Claude or Codex alike) is recorded in `traces/` on your machine — agent, backend, model, a hash of the agent's prompt, tokens, latency, repairs, errors, and the prompt/output text (set `record_content = false` to keep metadata only). The corpus itself is stored as a hash, never copied. `rt trace summary` and **Settings → Tracing & evals** show calls, errors and cost per agent *per prompt version*.
+
+**Langfuse (optional, self-hosted only).** `ops/langfuse/` has a compose file bound to 127.0.0.1 and a `setup.sh` that generates secrets and an API key pair:
+
+```bash
+pip install -e '.[tracing]'
+ops/langfuse/setup.sh && (cd ops/langfuse && docker compose up -d)
+export LANGFUSE_PUBLIC_KEY=... LANGFUSE_SECRET_KEY=...      # printed by setup.sh
+# resume-tailor.toml:  [observability]  langfuse = true
+rt trace status                                             # confirms it connects
+```
+
+A non-local host is refused: traces contain your whole knowledge base. Runs then appear in Langfuse as one trace each, a generation per agent, tagged with the prompt version; eval scores are attached to the eval traces.
+
+**Evals.**
+
+```bash
+rt eval build <run-id> --name fintech     # snapshot a finished run as a case
+# edit evals/cases/fintech.json: fix must_include / must_exclude, set "reviewed": true
+rt eval run --label baseline              # re-run Analyst, Selector, Recall + validator probe
+# change a prompt in src/resume_tailor/agents/prompts/, or the model, then:
+rt eval run --label tighter-selector
+rt eval compare baseline tighter-selector # which prompt versions differ, and the score deltas
+```
+
+Scores per case: `recall` (expected facts found), `exclusions` (picks you marked wrong), `stability` (agreement with the baseline run), and `validator_catches_fabrication` — a made-up bullet is injected into a real draft and the Validator must cut or flag it. **A case built from a run is `reviewed: false`: its scores mean "consistent with that run", not "correct", until you correct the file.** `compare` says when nothing differs between two results, so run-to-run noise isn't mistaken for improvement. Cases and results live in `evals/` (gitignored: they contain real postings).
+
 ## Next step
 
-M8: self-hosted Langfuse tracing and a prompt eval set
-([OQ-10](docs/open-questions.md)) — so "did prompt v2 select better than v1"
-becomes answerable, which is what OQ-6 (which model for which agent) is waiting
-on.
+Review your first eval cases (`rt eval build`, then correct `must_include`) and use
+`rt eval compare` to settle OQ-6 — which model for which agent — with numbers.

@@ -72,3 +72,13 @@ def test_serve_root_is_honoured(tmp_path, monkeypatch) -> None:
     (tmp_path / "kb").mkdir()
     monkeypatch.setenv("RESUME_TAILOR_ROOT", str(tmp_path))
     assert create_app().state.context.root == tmp_path.resolve()
+
+
+def test_observability_status_reports_local_log_and_refuses_public_hosts(client) -> None:
+    body = client.get("/api/observability").json()
+    assert body["local_log"] and body["langfuse"]["enabled"] is False
+    assert body["summary"] == [] and body["evals"] == []
+
+    cfg = client.app.state.context.config
+    cfg.observability.host = "https://cloud.langfuse.com"
+    assert "not a local" in client.get("/api/observability").json()["langfuse"]["refused"]
