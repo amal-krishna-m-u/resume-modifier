@@ -466,6 +466,12 @@ Honest limits as of today, roughly in order of how much they affect the output.
 
 Not built yet, on purpose: API-key providers as first-class backends (Anthropic, Vertex, Bedrock, OpenAI, Gemini; no CLI), and hosting (auth, HTTPS, persistent storage). What exists today, what is missing and why it waits: [docs/future-scope.md](docs/future-scope.md).
 
+## Contributing and contact
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) (setup, checks, and the privacy rules, which matter because this repository is public) and [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
+**Amal Krishna M.U** — [amalkrishnam3@gmail.com](mailto:amalkrishnam3@gmail.com) · [LinkedIn](https://www.linkedin.com/in/amal-krishna-m-u-4055a1185/) · [GitHub](https://github.com/amal-krishna-m-u) · [xpar.in](https://xpar.in) · [Medium](https://medium.com/@amalmullangathtech)
+
 ## Next step
 
 Review your first eval cases (`rt eval build`, then correct `must_include`) and use
