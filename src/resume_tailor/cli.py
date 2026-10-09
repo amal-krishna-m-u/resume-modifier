@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 from pathlib import Path
 
 import typer
@@ -46,7 +47,26 @@ ROOT_OPTION = typer.Option(
 
 
 def _resolve(root: Path | None) -> tuple[Path, Path, Path]:
-    base = (root or repo_root()).resolve()
+    """Project root: `--root`, then `RESUME_TAILOR_ROOT`, then a `kb/` walk.
+
+    The walk starts at the working directory and, if that is not inside the
+    project, at the parent of the venv (`sys.prefix`). That is what lets a
+    `~/bin/rt` symlink start and stop this tool from any directory.
+    """
+    if root is None:
+        env = os.environ.get("RESUME_TAILOR_ROOT")
+        if env:
+            root = Path(env)
+        else:
+            walked = repo_root()
+            venv_parent = Path(sys.prefix).resolve().parent
+            if (walked / "kb").is_dir():
+                root = walked
+            elif (venv_parent / "kb").is_dir():
+                root = venv_parent
+            else:
+                root = walked
+    base = root.resolve()
     kb_dir = base / "kb"
     if not kb_dir.is_dir():
         typer.secho(f"no kb/ directory under {base}", fg=typer.colors.RED, err=True)
@@ -271,6 +291,43 @@ def health(
         raise typer.Exit(1) from exc
 
 
+@app.command("fit")
+def fit_command(
+    text: str | None = typer.Option(None, "--text", help="The job posting, pasted."),
+    file: Path | None = typer.Option(None, "--file", help="Read the posting from a file."),
+    root: Path | None = ROOT_OPTION,
+) -> None:
+    """Find an existing resume that already fits this posting. No model call."""
+    from .pipeline.fit import fit as fit_posting
+
+    base, _, _ = _resolve(root)
+    posting = (file.read_text(encoding="utf-8") if file else text or "").strip()
+    if not posting:
+        typer.secho("give me the posting: --text or --file", fg=typer.colors.RED, err=True)
+        raise typer.Exit(2)
+    ranked = fit_posting(posting, base / "runs", base / "applications")
+    if not ranked:
+        typer.echo("no completed resumes to reuse yet — run the pipeline once.")
+        raise typer.Exit(0)
+    best = ranked[0]
+    kind = "use this resume" if best.recommend else "closest, but a new tailor is safer"
+    typer.secho(f"  {best.card.title}", bold=True)
+    typer.echo(f"  {best.card.kind} {best.card.id}  score {best.score:.2f}  ·  {kind}")
+    if best.card.company:
+        typer.echo(f"  company {best.card.company}")
+    if best.absent:
+        typer.secho("\n  gaps this resume does not cover", bold=True)
+        for gap in best.absent[:8]:
+            typer.echo(f"  - {gap.text}")
+    if best.weak:
+        typer.echo("\n  weak on")
+        for gap in best.weak[:6]:
+            typer.echo(f"  - {gap.text}")
+    typer.echo("\n  rt tailor --file …    new resume from the knowledge base")
+    if best.card.run_id:
+        typer.echo(f"  open run {best.card.run_id} to reuse or fill gaps in the UI")
+
+
 @app.command("tailor")
 def tailor(
     text: str | None = typer.Option(None, "--text", help="The job posting, pasted."),
@@ -439,7 +496,9 @@ def serve(
     import uvicorn
 
     base, _, _ = _resolve(root)
-    typer.secho(f"  http://127.0.0.1:{port}", fg=typer.colors.GREEN, bold=True)
+    from .api.daemon import public_url
+
+    typer.secho(f"  {public_url(port)}", fg=typer.colors.GREEN, bold=True)
     typer.echo(f"  serving {base}")
     if not (base / "web" / "dist").is_dir():
         typer.secho(
@@ -459,6 +518,62 @@ def serve(
         reload=reload,
         log_level="info",
     )
+
+
+@app.command("start")
+def start_command(
+    root: Path | None = ROOT_OPTION,
+    port: int = typer.Option(8000, "--port"),
+) -> None:
+    """Start the web interface in the background. `rt stop` closes it."""
+    from .api.daemon import start as start_server
+
+    base, _, _ = _resolve(root)
+    state = start_server(base, port)
+    if not state.running:
+        typer.secho(state.detail or "failed to start", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    from .api.daemon import alias_resolves, public_url
+
+    url = public_url(state.port)
+    if state.detail == "started":
+        typer.secho(f"  {url}", fg=typer.colors.GREEN, bold=True)
+        typer.echo(f"  pid {state.pid}  ·  rt stop to close")
+    else:
+        typer.echo(f"  already running at {url} (pid {state.pid})")
+    if not alias_resolves():
+        typer.echo('  to type rs.local:  sudo sh -c \'echo "127.0.0.1 rs.local" >> /etc/hosts\'')
+
+
+@app.command("stop")
+def stop_command(root: Path | None = ROOT_OPTION) -> None:
+    """Close the background web interface started by `rt start`."""
+    from .api.daemon import stop as stop_server
+
+    base, _, _ = _resolve(root)
+    state = stop_server(base)
+    typer.echo(state.detail)
+
+
+@app.command("open")
+def open_command(
+    root: Path | None = ROOT_OPTION,
+    port: int = typer.Option(8000, "--port"),
+) -> None:
+    """Start the UI if needed and open it in the browser (`rs.local` when set)."""
+    from .api.daemon import open_browser, public_url, read_state
+    from .api.daemon import start as start_server
+
+    base, _, _ = _resolve(root)
+    state = read_state(base)
+    if not state.running:
+        state = start_server(base, port)
+    if not state.running:
+        typer.secho(state.detail or "failed to start", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    url = public_url(state.port)
+    open_browser(url)
+    typer.secho(f"  {url}", fg=typer.colors.GREEN, bold=True)
 
 
 apps_app = typer.Typer(no_args_is_help=True, help="The application archive and tracker.")

@@ -51,9 +51,23 @@ CLI flags, and their Agent SDK equivalents:
 
 ### 3.1 `OpenAICompatRunner` — build this first
 
-One implementation of `POST /v1/chat/completions` covers Ollama (which serves an OpenAI-compatible shape on `localhost:11434`), OpenRouter, Groq, Together, LM Studio, vLLM, and OpenAI itself. A different provider is a `base_url` change.
+One implementation of `POST /v1/chat/completions` covers Ollama (which serves an OpenAI-compatible shape on `localhost:11434`), Groq, Together, LM Studio, vLLM, and OpenAI itself. A different provider is a `base_url` change.
 
 Highest return of any backend: one file, no harness overhead, real schema enforcement where the provider supports it.
+
+### 3.1a `OpenRouterRunner`
+
+OpenRouter is the same protocol with the defaults a full-corpus run needs, so it is a named backend rather than a Settings form the user has to fill in:
+
+- `https://openrouter.ai/api/v1`
+- `OPENROUTER_API_KEY`
+- 1,000,000-token window
+- native JSON schema
+- default model `z-ai/glm-5.3-flash`
+
+The lab does not matter. GLM 5.3 Flash (priced 2026-10-09 at $0.15 / $0.50 per 1M tokens; 1M context; structured outputs; Artificial Analysis intelligence 41.8) is the cost/quality pick that clears the Validator bar in §6 without pinning the tool to Anthropic. A five-agent run on the current corpus is a couple of cents.
+
+Same Settings list, same protocol: `qwen/qwen3.8-flash` ($0.15 / $0.47) and `deepseek/deepseek-v4.1-flash` (intelligence 39.5, $0.30 / $1.20). Skip the cheapest DeepSeek Flash SKUs (intelligence ~24): they are fine for drafting and too weak for silent misses in Selector/Validator. `anthropic/claude-haiku-5.5` remains available and is slightly cheaper per token if you want it.
 
 ### 3.2 `ClaudeSdkRunner` / `ClaudeCliRunner`
 
@@ -122,7 +136,7 @@ Selection and writing degrade *visibly*. The Validator degrades *invisibly* — 
 
 ```toml
 [runtime]
-backend = "claude_sdk"          # claude_sdk | claude_cli | codex_cli | openai_compat | fake
+backend = "claude_sdk"          # claude_sdk | claude_cli | codex_cli | openrouter | openai_compat | fake
                                 # claude_sdk is the default, per OQ-1
 
 [runtime.openai_compat]
@@ -130,8 +144,9 @@ base_url = "http://localhost:11434/v1"
 model    = "qwen2.5:14b"
 
 [runtime.backend_models]        # one model per backend; empty = that CLI's own default
-claude_sdk = "opus"
-codex_cli  = "gpt-5.5"
+claude_sdk  = "opus"
+codex_cli   = "gpt-5.5"
+openrouter  = "z-ai/glm-5.3-flash"
 
 [runtime.models]
 default   = "<backend default>"

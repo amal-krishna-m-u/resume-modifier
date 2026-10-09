@@ -218,6 +218,11 @@ export function Settings() {
 
               {selected && (
                 <div className="mt-3 space-y-3 pl-7">
+                  {info.login && (
+                    <p className="text-xs text-stone-500">
+                      Auth: <code className="font-mono">{info.login}</code>
+                    </p>
+                  )}
                   {info.name !== "openai_compat" ? (
                     <div>
                       <label className="block text-xs font-medium text-stone-500">

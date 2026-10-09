@@ -260,3 +260,24 @@ export interface KbChatTurn {
   questions?: string[];
   proposals?: Proposal[];
 }
+
+export interface FitHole {
+  text: string;
+  overlap: number;
+}
+
+export interface FitMatch {
+  kind: "run" | "application";
+  id: string;
+  title: string;
+  company: string | null;
+  run_id: string | null;
+  role_title: string | null;
+  score: number;
+  posting_score: number;
+  resume_score: number;
+  recommend: boolean;
+  covered: number;
+  weak: FitHole[];
+  absent: FitHole[];
+}

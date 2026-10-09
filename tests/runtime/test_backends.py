@@ -133,6 +133,44 @@ def test_codex_skips_the_git_repo_check() -> None:
     assert runner.capabilities.min_context_tokens == 272_000
 
 
+def test_openrouter_defaults_fit_this_pipeline(monkeypatch) -> None:
+    """OpenRouter is openai_compat with the defaults a full-corpus run needs:
+    a 1M window, native JSON, and an auth error that names the real env var.
+    A missing key must fail before a request, otherwise the failure looks like
+    a network problem."""
+    from resume_tailor.runtime.openrouter import DEFAULT_MODEL, OpenRouterRunner
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    runner = OpenRouterRunner()
+    assert runner.name == "openrouter"
+    assert runner.model == DEFAULT_MODEL
+    assert runner.capabilities.min_context_tokens == 1_000_000
+    assert runner.capabilities.native_json_schema
+    assert runner.capabilities.harness_overhead == 0
+    assert runner.capabilities.cost_per_run == "metered"
+    assert runner.api_key_env == "OPENROUTER_API_KEY"
+
+
+async def test_openrouter_healthcheck_names_the_missing_key(monkeypatch) -> None:
+    from resume_tailor.runtime.openrouter import OpenRouterRunner
+
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    report = await OpenRouterRunner().healthcheck()
+    assert not report.ok
+    assert report.credential == "OPENROUTER_API_KEY"
+    assert "OPENROUTER_API_KEY" in report.detail
+
+
+def test_openrouter_honours_the_per_backend_model() -> None:
+    from resume_tailor.runtime.openrouter import OpenRouterRunner
+
+    config = Config()
+    config.backend_models["openrouter"] = "z-ai/glm-5.3-flash"
+    runner = build_backend(config, "openrouter", trace=False)
+    assert isinstance(runner, OpenRouterRunner)
+    assert runner.model == "z-ai/glm-5.3-flash"
+
+
 # -- the fake backend ------------------------------------------------------
 
 
@@ -226,6 +264,21 @@ async def test_sdk_round_trip_on_the_real_backend() -> None:
         system_prompt="You reply with JSON only. No prose, no code fences.",
     )
     result = await ClaudeSdkRunner().run_agent(spec, 'Reply with exactly this JSON: {"ok": true}')
+    assert result.json == {"ok": True}
+    assert result.usage.input_tokens > 0
+
+
+@pytest.mark.live
+async def test_openrouter_round_trip_on_the_real_backend() -> None:
+    """Same bar as the other live backends: JSON out, usage reported."""
+    if not os.environ.get("OPENROUTER_API_KEY"):
+        pytest.skip("OPENROUTER_API_KEY is not set")
+    runner = build_backend(Config(), "openrouter", trace=False)
+    assert (await runner.healthcheck()).ok
+    spec = AgentSpec(
+        name="probe", system_prompt="You reply with JSON only. No prose, no code fences."
+    )
+    result = await runner.run_agent(spec, 'Reply with exactly this JSON: {"ok": true}')
     assert result.json == {"ok": True}
     assert result.usage.input_tokens > 0
 

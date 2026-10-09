@@ -6,7 +6,7 @@
 #
 # kb/ is versioned instead by its OWN git repository, which has no remote, so
 # history, diff and revert all keep working (AC-R8.3, spec-04 §3) without
-# anything being published. See README -> Local setup.
+# anything being published. See README -> Setup and run.
 #
 # Only the template is tracked here, because a fresh clone needs it.
 kb/*

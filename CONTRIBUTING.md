@@ -13,7 +13,7 @@ brew install tectonic        # PDF rendering
 cp kb/identity.example.yaml kb/identity.yaml
 ```
 
-See the README's *Local setup* for the full version.
+See the README's *Setup and run* for the full version (macOS, Linux, Windows).
 
 ## Before you open a pull request
 

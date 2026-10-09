@@ -39,7 +39,14 @@ __all__ = [
     "build_backend",
 ]
 
-BACKENDS = ("claude_sdk", "claude_cli", "codex_cli", "openai_compat", "fake")
+BACKENDS = (
+    "claude_sdk",
+    "claude_cli",
+    "codex_cli",
+    "openrouter",
+    "openai_compat",
+    "fake",
+)
 
 
 #: What the Settings screen shows. `models` are suggestions only, never a
@@ -63,6 +70,21 @@ BACKEND_INFO: dict[str, dict] = {
         "blurb": "Your ChatGPT/Codex login. Leave the model empty to use Codex's own default.",
         "login": "codex login",
         "models": [],
+    },
+    "openrouter": {
+        "label": "OpenRouter",
+        "blurb": (
+            "Metered API. Default is GLM 5.3 Flash. Qwen, DeepSeek and others "
+            "are in the list — any lab is fine."
+        ),
+        "login": "export OPENROUTER_API_KEY",
+        "models": [
+            "z-ai/glm-5.3-flash",
+            "qwen/qwen3.8-flash",
+            "deepseek/deepseek-v4.1-flash",
+            "xiaomi/mimo-v2.6-flash",
+            "anthropic/claude-haiku-5.5",
+        ],
     },
     "openai_compat": {
         "label": "OpenAI-compatible server",
@@ -108,6 +130,11 @@ def _construct(config: Config, name: str) -> RunnerBackend:
 
         return CodexCliRunner(model=config.model_for(name))
 
+    if name == "openrouter":
+        from .openrouter import OpenRouterRunner
+
+        return OpenRouterRunner(model=config.model_for(name))
+
     if name == "openai_compat":
         from .openai_compat import OpenAICompatRunner
 
@@ -116,6 +143,7 @@ def _construct(config: Config, name: str) -> RunnerBackend:
             base_url=compat.base_url,
             model=compat.model,
             api_key=os.environ.get(compat.api_key_env),
+            api_key_env=compat.api_key_env,
             context_tokens=compat.context_tokens,
             native_json_schema=compat.native_json_schema,
         )

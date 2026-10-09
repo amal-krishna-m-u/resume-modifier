@@ -49,6 +49,9 @@ from ..observability import scope as trace_scope
 from ..observability import set_publisher
 from ..pipeline import curator
 from ..pipeline.artifacts import Run, guess_role, list_runs, run_slug
+from ..pipeline.fit import as_json, fill_prompt, fit_run
+from ..pipeline.fit import fit as fit_posting
+from ..pipeline.fit import library as fit_library
 from ..pipeline.orchestrator import Pipeline
 from ..pipeline.report import render_gap_report
 from ..render.compile import compile_pdf
@@ -599,6 +602,39 @@ def _router(context: Context) -> APIRouter:  # noqa: C901 — one route per endp
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
+
+    @router.post("/fit")
+    async def fit_lookup(payload: dict = Body(...)) -> dict[str, Any]:
+        """Rank existing resumes against a posting. Local, no model call."""
+        posting = (payload.get("text") or "").strip()
+        if not posting:
+            raise WriteError("no posting text supplied", remedy="Paste the posting first.")
+        ranked = fit_posting(posting, context.runs_dir, context.applications_dir)
+        return {
+            "matches": [as_json(row) for row in ranked],
+            "library_size": len(fit_library(context.runs_dir, context.applications_dir)),
+        }
+
+    @router.post("/fit/fill")
+    async def fit_fill(payload: dict = Body(...)) -> dict[str, Any]:
+        """Revise the matched run so it covers Fit's gaps. One Writer+Validator
+        turn, not a five-agent rebuild."""
+        posting = (payload.get("text") or "").strip()
+        run_id = (payload.get("run_id") or "").strip()
+        if not posting or not run_id:
+            raise WriteError(
+                "need the posting and the run to update",
+                remedy="Pick a matched resume that still has a run.",
+            )
+        run = _run_or_404(context, run_id)
+        match = fit_run(posting, run)
+        if match is None:
+            raise NotFound(
+                f"run {run_id} has no resume to update",
+                remedy="Pick a completed run, or run the full pipeline.",
+            )
+        message = fill_prompt(posting, match)
+        return await runs_chat(run_id, {"message": message})
 
     @router.post("/runs")
     async def runs_create(payload: dict = Body(...)) -> dict[str, Any]:

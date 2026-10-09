@@ -5,6 +5,20 @@
 
 ---
 
+## 0. Fit — reuse before a new tailor
+
+Most postings are a shape you have already written a resume for. Fit ranks completed runs and promoted applications against the new JD **on the machine, with no model call**, then shows the gaps that resume does not cover.
+
+The person then:
+
+1. **Uses that resume** as-is (open the run or the application record).
+2. **Fills the gaps** — one Writer + Validator chat turn on the existing draft, told exactly which holes to cover. It must not invent facts.
+3. **Runs the five-agent pipeline** when the posting is a new shape, or Fit's score is below the reuse floor (0.32 cosine on posting + resume text).
+
+Fit is ranking among resumes that already exist. It does not filter the knowledge base (AC-R11.3). A local overlap of requirement-like lines is a sketch, not the Analyst; filling gaps is how implied requirements get a model pass without paying for Selector and Recall again.
+
+---
+
 ## 1. Runs are not applications
 
 A second boundary, parallel to the `kb/` vs `runs/` one in [spec-01 §1](spec-01-knowledge-base.md):

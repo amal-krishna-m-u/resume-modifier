@@ -4,6 +4,322 @@ A local, single-user system that tailors a resume to a job description from a co
 
 **Status:** milestones M1–M8 are built and merged. It runs end to end today on Claude and on Codex: paste a posting, watch the agents work, review what matched and what's missing, revise by chat, export PDFs, and archive what you sent. See [What it does today](#what-it-does-today), [Current challenges](#current-challenges) and [Future scope](#future-scope).
 
+## Setup and run
+
+You do not need a programming background. You will paste commands into a terminal. After each install, run the **Check** so you know it worked. Plan about 15 minutes.
+
+### 1. Open a terminal
+
+| Computer | What to open |
+|---|---|
+| **macOS** | Spotlight (`Cmd+Space`), type `Terminal`, press Return |
+| **Windows** | Start menu, type `PowerShell`, open **Windows PowerShell** or **Terminal** |
+| **Linux** | Open **Terminal** from the applications menu |
+
+Leave this window open. You will paste into it.
+
+### 2. Prerequisites
+
+Install these five things, then come back. Skip any whose check already succeeds.
+
+| Need | What it is for | Check (paste this) | You want to see |
+|---|---|---|---|
+| **Git** | Downloads the project | `git --version` | `git version 2…` |
+| **Python 3.12 or newer** | Runs the app | `python3 --version` (Windows: `py -3 --version`) | `Python 3.12` or `3.13`… |
+| **Node.js 20 or newer** | Builds the web page | `node --version` then `npm --version` | `v20…` / `v22…` and an npm version |
+| **Tectonic** | Turns a resume into a PDF | `tectonic --version` | a version number |
+| **An AI account** | Writes the tailored resume | Open Settings after the app starts | Claude, Codex, or an OpenRouter key |
+
+Close and reopen the terminal after each installer, then run the check again.
+
+#### Git
+
+- **macOS:** paste `xcode-select --install` and follow the dialog. Or download [git-scm.com](https://git-scm.com/download/mac).
+- **Windows:** download [git-scm.com](https://git-scm.com/download/win). Keep the defaults. Tick **Git from the command line** if you see that option.
+- **Linux (Debian/Ubuntu):** `sudo apt update && sudo apt install -y git`
+
+#### Python 3.12 or newer
+
+- **macOS / Windows:** download **Python 3.12** (or newer) from [python.org/downloads](https://www.python.org/downloads/). On Windows, tick **Add python.exe to PATH** on the first installer screen.
+- **Linux (Debian/Ubuntu):**
+
+```bash
+sudo apt update && sudo apt install -y python3.12 python3.12-venv python3.12-dev
+```
+
+If `python3.12` is not found, install from the [deadsnakes PPA](https://launchpad.net/~deadsnakes/+archive/ubuntu/ppa) (`sudo add-apt-repository ppa:deadsnakes/ppa` then the command above) or pick a newer distro package that is 3.12+.
+
+**Check:** `python3 --version` on macOS and Linux. On Windows use `py -3 --version`. If that prints 3.11 or older, the installer did not land on your PATH — reopen the terminal, or reinstall and tick **Add to PATH**.
+
+#### Node.js 20 or newer (LTS)
+
+Download the **LTS** installer from [nodejs.org](https://nodejs.org/). Run it, accept the defaults, then reopen the terminal.
+
+**Check:** `node --version` and `npm --version`.
+
+#### Tectonic (PDF engine, ~70MB)
+
+Pick one. The official one-liner drops the program in the folder you are in; the extra line moves it onto your PATH so `tectonic` works everywhere.
+
+**macOS** (Homebrew, easiest if you have it):
+
+```bash
+brew install tectonic
+```
+
+If you do not have Homebrew, install it from [brew.sh](https://brew.sh/) first, or use the copy-paste installer below.
+
+**macOS and Linux** (no Homebrew):
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://drop-sh.fullyjustified.net | sh
+mkdir -p "$HOME/.local/bin"
+mv -f tectonic "$HOME/.local/bin/tectonic"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc" 2>/dev/null || true
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc" 2>/dev/null || true
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+On Linux, `sudo apt install tectonic` or `sudo pacman -S tectonic` also works when your distro ships it.
+
+**Windows** (PowerShell):
+
+```powershell
+[System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+iex ((New-Object System.Net.WebClient).DownloadString('https://drop-ps1.fullyjustified.net'))
+$bin = Join-Path $HOME "bin"
+New-Item -ItemType Directory -Force $bin | Out-Null
+Move-Item -Force .\tectonic.exe (Join-Path $bin "tectonic.exe")
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$bin*") {
+  [Environment]::SetEnvironmentVariable("Path", "$bin;$userPath", "User")
+}
+$env:Path = "$bin;$env:Path"
+```
+
+If you already use Scoop: `scoop bucket add extras; scoop install tectonic`.
+
+**Check:** `tectonic --version`. The first PDF later needs internet once, so Tectonic can fetch LaTeX packages.
+
+#### An AI account (needed to tailor a resume)
+
+The app starts without this. Tailoring a job posting needs one of:
+
+- a [Claude](https://claude.ai/) account with Claude Code / the Claude CLI signed in, or
+- a ChatGPT account with [Codex](https://chatgpt.com/) / the Codex CLI signed in, or
+- an [OpenRouter](https://openrouter.ai/) API key
+
+You pick the backend in **Settings** after the web page opens.
+
+### 3. Download the project
+
+**macOS / Linux:**
+
+```bash
+git clone https://github.com/amal-krishna-m-u/resume-modifier.git
+cd resume-modifier
+```
+
+**Windows (PowerShell):**
+
+```powershell
+git clone https://github.com/amal-krishna-m-u/resume-modifier.git
+cd resume-modifier
+```
+
+If you already downloaded a ZIP from GitHub, unzip it and `cd` into that folder instead. Stay in this folder for the next steps. Use the URL on the green **Code** button if it differs.
+
+### 4. Install the app
+
+**macOS / Linux:**
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -U pip
+.venv/bin/pip install -e .
+```
+
+**Windows (PowerShell):**
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python -m pip install -U pip
+.\.venv\Scripts\pip install -e .
+```
+
+If `py -3` is not recognized, use `python -m venv .venv` instead.
+
+**Check:** macOS/Linux: `.venv/bin/rt --help`. Windows: `.\.venv\Scripts\rt.exe --help`. You should see a list of commands.
+
+### 5. Build the web page (once)
+
+**macOS / Linux:**
+
+```bash
+cd web && npm install && npm run build && cd ..
+```
+
+**Windows (PowerShell):**
+
+```powershell
+cd web; npm install; npm run build; cd ..
+```
+
+**Check:** a `web/dist` folder exists after this. You only redo this step when the web code changes.
+
+### 6. Create your identity file
+
+This is your name and contact details on the resume. The real file stays on your computer and is never committed to the public repo.
+
+**macOS / Linux:**
+
+```bash
+mkdir -p kb/roles kb/facts kb/projects kb/blogs kb/education kb/certifications kb/awards
+cp kb/identity.example.yaml kb/identity.yaml
+git init kb
+```
+
+**Windows (PowerShell):**
+
+```powershell
+New-Item -ItemType Directory -Force kb/roles, kb/facts, kb/projects, kb/blogs, kb/education, kb/certifications, kb/awards | Out-Null
+Copy-Item kb/identity.example.yaml kb/identity.yaml
+git init kb
+```
+
+Open `kb/identity.yaml` in any text editor. Put your name, email, and phone in. Save.
+
+**Check:**
+
+- macOS/Linux: `.venv/bin/rt kb validate`
+- Windows: `.\.venv\Scripts\rt.exe kb validate`
+
+### 7. Start the app
+
+**macOS / Linux:**
+
+```bash
+.venv/bin/rt start
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.\.venv\Scripts\rt.exe start
+```
+
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000) in your browser. In **Settings**, pick Claude, Codex, or OpenRouter and press **Test connection**.
+
+`rt stop` closes it. `rt serve` is the same server in the foreground (the window stays busy until you press Ctrl+C).
+
+### Use `rt` from any folder
+
+After this, you can type `rt start` in a new terminal without `cd` into the project. Do **not** move the project folder after you set this up. If you do, run these commands again.
+
+The wrappers in `bin/` point at this project's `.venv` and set `RESUME_TAILOR_ROOT`, so start, stop, and tailor always use **this** knowledge base.
+
+#### macOS
+
+```bash
+mkdir -p "$HOME/.local/bin"
+ln -sf "$(pwd)/bin/rt" "$HOME/.local/bin/rt"
+ln -sf "$(pwd)/bin/rs.local" "$HOME/.local/bin/rs.local"
+grep -q '.local/bin' "$HOME/.zshrc" 2>/dev/null || echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+macOS Terminal uses **zsh**. If you use bash, append the same `export PATH=…` line to `~/.bash_profile` instead.
+
+**Check:** open a **new** terminal, run `rt --help`.
+
+Optional, so the browser address is `http://rs.local:8000`:
+
+```bash
+sudo sh -c 'grep -q "[[:space:]]rs.local" /etc/hosts || echo "127.0.0.1 rs.local" >> /etc/hosts'
+```
+
+Then `rs.local` in a terminal starts the UI if needed and opens it.
+
+#### Linux
+
+```bash
+mkdir -p "$HOME/.local/bin"
+ln -sf "$(pwd)/bin/rt" "$HOME/.local/bin/rt"
+ln -sf "$(pwd)/bin/rs.local" "$HOME/.local/bin/rs.local"
+```
+
+If `rt --help` fails in a new terminal, add `~/.local/bin` to PATH. **bash:**
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+source "$HOME/.bashrc"
+```
+
+**zsh:**
+
+```bash
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.zshrc"
+source "$HOME/.zshrc"
+```
+
+**fish:**
+
+```fish
+fish_add_path $HOME/.local/bin
+```
+
+**Check:** new terminal, `rt --help`.
+
+Optional hosts alias (same as macOS):
+
+```bash
+sudo sh -c 'grep -q "[[:space:]]rs.local" /etc/hosts || echo "127.0.0.1 rs.local" >> /etc/hosts'
+```
+
+#### Windows (PowerShell)
+
+Run this **in the project folder**. It adds this repo's `bin` directory to your user PATH so `rt` and `rs.local` resolve to `bin\rt.cmd` and `bin\rs.local.cmd`.
+
+```powershell
+$bin = (Resolve-Path .\bin).Path
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if ($userPath -notlike "*$bin*") {
+  [Environment]::SetEnvironmentVariable("Path", "$bin;$userPath", "User")
+}
+$env:Path = "$bin;$env:Path"
+rt --help
+```
+
+Close extra terminals and open a new one.
+
+**Check:** `rt --help` from a folder that is **not** the project (for example `cd $HOME`).
+
+Optional, so you can type `http://rs.local:8000` in the browser. Run PowerShell **as Administrator**:
+
+```powershell
+$hosts = "$env:SystemRoot\System32\drivers\etc\hosts"
+if (-not (Select-String -Path $hosts -Pattern '\srs\.local\s*$' -Quiet)) {
+  Add-Content -Path $hosts -Value "127.0.0.1 rs.local"
+}
+```
+
+#### Windows with WSL
+
+Install the project **inside WSL** (Ubuntu is fine) and follow the **Linux** steps. That is the smoothest Windows path if you already use WSL. Git-Bash can run the `bin/rt` shell wrapper too, once the venv exists.
+
+### If something fails
+
+| Message / symptom | What to do |
+|---|---|
+| `python3: command not found` / `py` not recognized | Reinstall Python 3.12+ and tick **Add to PATH**. Reopen the terminal. |
+| `Python 3.11` (or older) | The default `python3` is too old. Use `python3.12` / `py -3.12` in the venv command. |
+| `npm: command not found` | Reinstall Node.js LTS. Reopen the terminal. |
+| `tectonic: command not found` | The binary is not on PATH. Redo the Tectonic step, then reopen the terminal. |
+| `no kb/ directory` | You are in the wrong folder, or step 6 was skipped. `cd` into the clone. |
+| `rt` works in the project folder and nowhere else | The PATH step did not apply to this terminal. Open a **new** window. |
+| Browser cannot load the page | Run `rt start` again. Open `http://127.0.0.1:8000` (plain http). |
+| Tailoring errors about auth | Open **Settings**, pick a backend, **Test connection**, sign in to that CLI or paste the API key. |
+
 ## What it does today
 
 - **Tailors from a full knowledge base.** Five agents (Analyst, Selector, Recall, Writer, Validator); Selector and Recall each read every fact in full, and a Validator cuts any claim without a recorded source.
@@ -140,12 +456,13 @@ flowchart TB
         CACHE[(".cache/index.json<br/><i>derived, never authoritative</i>")]
     end
 
-    subgraph runtime["runtime/ — one interface, five backends"]
+    subgraph runtime["runtime/ — one interface, six backends"]
         BASE["<b>RunnerBackend</b><br/><i>string in, JSON out</i>"]
         SDK["claude_sdk<br/><i>default</i>"]
         CLIB["claude_cli"]
         CODEX["codex_cli"]
-        COMPAT["openai_compat<br/><i>Ollama, OpenRouter, …</i>"]
+        OR["openrouter<br/><i>GLM 5.3 Flash</i>"]
+        COMPAT["openai_compat<br/><i>Ollama, …</i>"]
         FAKE["fake<br/><i>tests</i>"]
     end
 
@@ -157,7 +474,7 @@ flowchart TB
     PIPELINE --> RENDER
     PIPELINE --> BASE
     AGENTS --> BASE
-    BASE --> SDK & CLIB & CODEX & COMPAT & FAKE
+    BASE --> SDK & CLIB & CODEX & OR & COMPAT & FAKE
     PIPELINE --> LOADER
     RENDER --> LOADER
     APPS --> RENDER
@@ -232,23 +549,11 @@ repository that has **no remote** — full history locally, nothing published �
 because the public repo would otherwise carry the complete career record. The
 single action that would undo that is `git -C kb remote add`.
 
-## Local setup
+## Your knowledge base stays on this computer
 
-```bash
-brew install tectonic                 # LaTeX engine, ~70MB (needed from M2 on)
-python3 -m venv .venv
-.venv/bin/pip install -e '.[dev]'
-```
+Install and first run are in [Setup and run](#setup-and-run). This section is why `kb/` is separate from the public repo.
 
-Then create the knowledge base. **It is not in this repository**, by design:
-
-```bash
-mkdir -p kb/{roles,facts,projects,blogs,education,certifications,awards}
-cp kb/identity.example.yaml kb/identity.yaml
-$EDITOR kb/identity.yaml              # name, contact sets, links
-git init kb                           # versioning, with NO remote — see below
-.venv/bin/rt kb validate
-```
+The knowledge base is **not in this repository**, by design. After you copy `kb/identity.example.yaml` and `git init kb`, keep that inner repo **without a remote**.
 
 ### Why `kb/` has its own git repository
 
@@ -286,18 +591,21 @@ directory, not from version control ([open-questions OQ-3](docs/open-questions.m
 ## Using it
 
 ```bash
-.venv/bin/rt serve                       # the web interface, 127.0.0.1 only
-.venv/bin/rt kb validate                 # the ten rules of spec-01 §4
-.venv/bin/rt kb stats                    # corpus size — the numbers OQ-2 tracks
-.venv/bin/rt health                      # backend, auth, Tectonic, context fit
+rt start                                 # web UI in the background
+rt stop                                  # close it
+rs.local                                 # start if needed and open the UI
+rt fit --file posting.txt                # reuse an existing resume; no model call
+rt kb validate                           # the ten rules of spec-01 §4
+rt kb stats                              # corpus size — the numbers OQ-2 tracks
+rt health                                # backend, auth, Tectonic, context fit
 
-.venv/bin/rt render                      # the whole KB, no agents involved
-.venv/bin/rt tailor --file posting.txt   # the five-agent pipeline
-.venv/bin/rt tailor --resume <run-id>    # continue from the last completed stage
+rt render                                # the whole KB, no agents involved
+rt tailor --file posting.txt             # the five-agent pipeline
+rt tailor --resume <run-id>              # continue from the last completed stage
 
-.venv/bin/rt apply <run-id> --company Acme --role "Backend Engineer"
-.venv/bin/rt applications list --live    # the tracker
-.venv/bin/rt applications verify         # re-hash the archive, report drift
+rt apply <run-id> --company Acme --role "Backend Engineer"
+rt applications list --live              # the tracker
+rt applications verify                   # re-hash the archive, report drift
 ```
 
 A `tailor` run writes everything it did into `runs/<id>/`: the requirements it
@@ -368,9 +676,22 @@ The compiled resume stays on screen while you work. **Revise** (chat), **Sources
 ## The web interface
 
 ```bash
-cd web && npm install && npm run build   # once
-.venv/bin/rt serve                       # http://127.0.0.1:8000
+cd web && npm install && npm run build   # once (already done in Setup and run)
+rt start                                 # http://127.0.0.1:8000
+rt stop                                  # close it
+rs.local                                 # start if needed, then open the browser
 ```
+
+`rt start` detaches the server so you can leave the terminal. `rt serve` is the
+same process in the foreground, useful while developing. `rt open` (and the
+`rs.local` command) start it if it is down and open the browser.
+
+To run these from any directory, put the wrappers on PATH: [Use `rt` from any folder](#use-rt-from-any-folder) (macOS, Linux, and Windows). Do not move the project after that.
+
+The UI is `http://127.0.0.1:8000`, or `http://rs.local:8000` once the hosts alias is set. Port 80 needs root (`rt start --port 80`) if you want the address with no port number.
+
+The wrapper sets `RESUME_TAILOR_ROOT` to this repository, so start/stop/tailor
+keep using this knowledge base even when your cwd is somewhere else.
 
 One process, one port: the API under `/api`, the built bundle served from the
 same origin, so there is no CORS configuration to get wrong. In development
@@ -381,9 +702,9 @@ Export is disabled until the review screen has been opened (AC-R4.3). The whole
 point is that you see what was cut and what is missing before anything leaves
 the machine.
 
-## Choosing Claude or Codex
+## Choosing Claude, Codex or OpenRouter
 
-Open **Settings** in the web interface (or click the backend badge in the header): pick Claude (Agent SDK or CLI), Codex, or an OpenAI-compatible server, set a model per backend if you want one, and **Test connection** before saving. The choice is written to a local, gitignored `resume-tailor.toml` and applies to the next run or message. From a terminal: `RUNNER_BACKEND=codex_cli rt tailor --file jd.txt`.
+Open **Settings** in the web interface (or click the backend badge in the header): pick Claude (Agent SDK or CLI), Codex, OpenRouter, or an OpenAI-compatible server, set a model per backend if you want one, and **Test connection** before saving. OpenRouter reads `OPENROUTER_API_KEY` and defaults to GLM 5.3 Flash; Qwen 3.8 Flash and DeepSeek V4.1 Flash are in the same list. The choice is written to a local, gitignored `resume-tailor.toml` and applies to the next run or message. From a terminal: `RUNNER_BACKEND=openrouter rt tailor --file jd.txt`.
 
 ## Tests
 

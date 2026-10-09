@@ -1,0 +1,33 @@
+#!/bin/sh
+# Wrapper so `rt` works from any directory.
+#
+# Put this on your PATH yourself — symlink, do not move the project.
+# See README → Use `rt` from any folder.
+#
+# Resolves through symlinks to find the project, then runs the venv console
+# script with RESUME_TAILOR_ROOT set so `rt start` / `rt stop` / `rt tailor`
+# all hit this knowledge base even when your cwd is somewhere else.
+
+set -e
+SOURCE=$0
+while [ -L "$SOURCE" ]; do
+  DIR=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+  SOURCE=$(readlink "$SOURCE")
+  case $SOURCE in
+    /*) ;;
+    *) SOURCE=$DIR/$SOURCE ;;
+  esac
+done
+HERE=$(CDPATH= cd -- "$(dirname -- "$SOURCE")" && pwd)
+ROOT=$(CDPATH= cd -- "$HERE/.." && pwd)
+RT="$ROOT/.venv/bin/rt"
+if [ ! -x "$RT" ]; then
+  RT="$ROOT/.venv/Scripts/rt.exe"
+fi
+if [ ! -x "$RT" ]; then
+  echo "resume-tailor: the project venv has no rt command." >&2
+  echo "From the project folder, create .venv and run: python -m pip install -e ." >&2
+  exit 127
+fi
+export RESUME_TAILOR_ROOT="$ROOT"
+exec "$RT" "$@"

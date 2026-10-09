@@ -21,8 +21,32 @@ def client(tmp_path, monkeypatch):
 def test_defaults_list_every_real_backend(client) -> None:
     body = client.get("/api/settings").json()
     assert body["backend"] == "claude_sdk"
-    assert {b["name"] for b in body["backends"]} >= {"claude_sdk", "claude_cli", "codex_cli"}
-    assert "fake" not in {b["name"] for b in body["backends"]}
+    names = {b["name"] for b in body["backends"]}
+    assert names >= {
+        "claude_sdk",
+        "claude_cli",
+        "codex_cli",
+        "openrouter",
+        "openai_compat",
+    }
+    assert "fake" not in names
+    openrouter = next(b for b in body["backends"] if b["name"] == "openrouter")
+    assert openrouter["label"] == "OpenRouter"
+    assert openrouter["models"][0] == "z-ai/glm-5.3-flash"
+    assert "qwen/qwen3.8-flash" in openrouter["models"]
+    assert "deepseek/deepseek-v4.1-flash" in openrouter["models"]
+
+
+def test_openrouter_is_a_settings_choice(client) -> None:
+    """OpenRouter is a named backend, not a form the user has to fill in."""
+    r = client.put(
+        "/api/settings",
+        json={"backend": "openrouter", "models": {"openrouter": "qwen/qwen3.8-flash"}},
+    )
+    assert r.status_code == 200 and r.json()["backend"] == "openrouter"
+    reloaded = Config.load(client.root)
+    assert reloaded.backend == "openrouter"
+    assert reloaded.model_for("openrouter") == "qwen/qwen3.8-flash"
 
 
 def test_switching_persists_and_reloads(client) -> None:

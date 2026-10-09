@@ -42,13 +42,17 @@ class OpenAICompatRunner:
         model: str = "qwen2.5:14b",
         *,
         api_key: str | None = None,
+        api_key_env: str = "OPENAI_API_KEY",
+        extra_headers: dict[str, str] | None = None,
         context_tokens: int = 32_000,
         native_json_schema: bool = False,
         timeout: int = 600,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY")
+        self.api_key_env = api_key_env
+        self.api_key = os.environ.get(api_key_env) if api_key is None else api_key
+        self.extra_headers = extra_headers or {}
         self.timeout = timeout
         self.capabilities = BackendCapabilities(
             min_context_tokens=context_tokens,
@@ -64,6 +68,7 @@ class OpenAICompatRunner:
             data=json.dumps(payload).encode(),
             headers={
                 "Content-Type": "application/json",
+                **self.extra_headers,
                 **({"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}),
             },
         )
@@ -74,7 +79,7 @@ class OpenAICompatRunner:
             body = exc.read().decode("utf-8", "replace")[:300]
             if exc.code in (401, 403):
                 raise BackendAuthError(
-                    self.name, "an API key for this provider (OPENAI_API_KEY)", body
+                    self.name, f"an API key for this provider ({self.api_key_env})", body
                 ) from exc
             raise BackendError(
                 f"{self.name}: HTTP {exc.code} from {self.base_url}. {body}"
@@ -131,7 +136,7 @@ class OpenAICompatRunner:
         return AgentResult(agent.name, text, value, usage, session_id, repairs)
 
     async def healthcheck(self) -> HealthReport:
-        credential = "an API key, or none for a local server"
+        credential = f"{self.api_key_env}, or none for a local server"
         try:
             await to_thread(
                 self._post,

@@ -156,6 +156,7 @@ export function App() {
           <NewRun
             onStarted={(id) => navigate({ name: "run", id })}
             onOpen={(id) => navigate({ name: "run", id })}
+            onOpenApplication={(id) => navigate({ name: "application", id })}
           />
         )}
         {view.name === "run" && <RunScreen runId={view.id} />}

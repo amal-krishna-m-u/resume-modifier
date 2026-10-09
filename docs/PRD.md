@@ -50,6 +50,9 @@ This is a personal tool, not a product. It is never hosted, never multi-tenant, 
 ```
 JD (paste or URL)
    │
+   ├─▶ Fit        — local, no model: closest existing resume + sketched gaps
+   │                 reuse / fill gaps (Writer+Validator) / full pipeline
+   │
    ├─▶ Analyst    — parse into required / preferred / implicit requirements
    │
    ├─▶ Selector   — read FULL corpus, choose relevant facts, record why

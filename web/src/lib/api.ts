@@ -1,5 +1,5 @@
 import type {
-  ApplicationRow, Divergence, Draft, Entry, Gap, Health, Issue, KbIndex, RunDetail,
+  ApplicationRow, Divergence, Draft, Entry, FitMatch, Gap, Health, Issue, KbIndex, RunDetail,
   KbChatTurn, Proposal, RevisionTurn, RunSummary, Snapshot, StageEvent, Validation,
 } from "./types";
 
@@ -164,6 +164,17 @@ export const api = {
       body: JSON.stringify(patch),
     }),
   gapReport: (id: string) => request<{ markdown: string }>(`/runs/${id}/gap-report`),
+
+  fit: (text: string) =>
+    request<{ matches: FitMatch[]; library_size: number }>("/fit", {
+      method: "POST",
+      body: JSON.stringify({ text }),
+    }),
+  fitFill: (text: string, runId: string) =>
+    request<{ run_id: string }>("/fit/fill", {
+      method: "POST",
+      body: JSON.stringify({ text, run_id: runId }),
+    }),
 
   startRun: (text: string, company?: string, role?: string) =>
     request<{ run_id: string }>("/runs", {

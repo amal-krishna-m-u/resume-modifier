@@ -141,11 +141,13 @@ def test_every_backend_satisfies_the_protocol() -> None:
     from resume_tailor.runtime.codex_cli import CodexCliRunner
     from resume_tailor.runtime.fake import FakeRunner
     from resume_tailor.runtime.openai_compat import OpenAICompatRunner
+    from resume_tailor.runtime.openrouter import OpenRouterRunner
 
     for runner in (
         ClaudeSdkRunner(),
         ClaudeCliRunner(),
         CodexCliRunner(),
+        OpenRouterRunner(),
         OpenAICompatRunner(),
         FakeRunner(),
     ):
